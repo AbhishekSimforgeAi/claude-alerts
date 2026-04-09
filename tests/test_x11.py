@@ -1,5 +1,3 @@
-import pytest
-
 from claude_alerts.x11 import wm_class_string
 
 

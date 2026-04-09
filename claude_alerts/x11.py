@@ -1,11 +1,14 @@
 """X11 connection helpers — a thin wrapper around python-xlib for the operations we need."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from Xlib import X, display
-from Xlib.protocol import event as xevent
+from Xlib import error as xerr
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -56,7 +59,8 @@ class X11Client:
             win = self.display.create_resource_object("window", window_id)
             cls = win.get_wm_class()
             return wm_class_string(cls)
-        except Exception:
+        except (xerr.XError, ConnectionError) as e:
+            log.debug("get_wm_class(%#x) failed: %s", window_id, e)
             return ""
 
     def get_geometry(self, window_id: int) -> Optional[Geometry]:
@@ -68,7 +72,8 @@ class X11Client:
             return Geometry(
                 x=-coords.x, y=-coords.y, width=geo.width, height=geo.height,
             )
-        except Exception:
+        except (xerr.XError, ConnectionError) as e:
+            log.debug("get_geometry(%#x) failed: %s", window_id, e)
             return None
 
     def list_top_level_windows(self) -> list[int]:
