@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from claude_alerts.config import Config, load_config
+import pytest
+
+from claude_alerts.config import Config, ConfigError, load_config
 
 
 def test_defaults_when_no_file(tmp_path):
@@ -39,6 +41,49 @@ def test_partial_override(tmp_path):
     assert cfg.color_working == "#22c55e"  # default preserved
 
 
-def test_config_is_a_dataclass():
+def test_empty_file(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("")
+    cfg = load_config(p)
+    assert cfg == Config()
+
+
+def test_unknown_section_ignored(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[future_feature]\nfoo = "bar"\n')
+    cfg = load_config(p)
+    assert cfg == Config()
+
+
+def test_malformed_toml_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("this is not valid toml ===\n")
+    with pytest.raises(ConfigError, match="cannot parse"):
+        load_config(p)
+
+
+def test_wrong_type_thickness_string_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[border]\nthickness_px = "four"\n')
+    with pytest.raises(ConfigError, match="border.thickness_px"):
+        load_config(p)
+
+
+def test_wrong_type_thickness_float_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[border]\nthickness_px = 3.7\n')
+    with pytest.raises(ConfigError, match="border.thickness_px"):
+        load_config(p)
+
+
+def test_wrong_type_color_int_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[colors]\nworking = 42\n')
+    with pytest.raises(ConfigError, match="colors.working"):
+        load_config(p)
+
+
+def test_config_is_frozen():
     cfg = Config()
-    assert cfg.color_working == "#22c55e"
+    with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
+        cfg.color_working = "#000000"
