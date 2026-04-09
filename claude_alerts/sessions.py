@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from claude_alerts.events import ClaudeEvent
+
+log = logging.getLogger(__name__)
 
 
 class Status(enum.Enum):
@@ -40,7 +43,15 @@ class SessionStore:
         self._listeners: list[Callable[[str], None]] = []
 
     def on_change(self, callback: Callable[[str], None]) -> None:
-        """Subscribe to status / lifecycle changes. Callback receives session_id."""
+        """Subscribe to status / lifecycle changes. Callback receives session_id.
+
+        Fired on: session creation, status transitions, bound-window changes,
+        session removal (SessionEnd or eviction). NOT fired on no-op same-status
+        events or timestamp-only refreshes.
+
+        Subscribers must not block. Exceptions raised by a subscriber are caught
+        and logged; subsequent subscribers still run.
+        """
         self._listeners.append(callback)
 
     def get(self, session_id: str) -> Optional[Session]:
@@ -92,6 +103,19 @@ class SessionStore:
             self._notify(sid)
         return evicted
 
+    def set_bound_window(self, session_id: str, window_id: Optional[int]) -> None:
+        """Update a session's bound window id and notify subscribers if it changed."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            return
+        if session.bound_window_id == window_id:
+            return
+        session.bound_window_id = window_id
+        self._notify(session_id)
+
     def _notify(self, session_id: str) -> None:
         for cb in self._listeners:
-            cb(session_id)
+            try:
+                cb(session_id)
+            except Exception:
+                log.exception("session_id=%s: subscriber raised", session_id)
