@@ -84,6 +84,28 @@ def test_wrong_type_color_int_raises(tmp_path):
 
 
 def test_config_is_frozen():
+    from dataclasses import FrozenInstanceError
     cfg = Config()
-    with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
+    with pytest.raises(FrozenInstanceError):
         cfg.color_working = "#000000"
+
+
+def test_wrong_type_colors_section_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('colors = "not a table"\n')
+    with pytest.raises(ConfigError, match="colors must be a TOML table"):
+        load_config(p)
+
+
+def test_wrong_type_border_section_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('border = "not a table"\n')
+    with pytest.raises(ConfigError, match="border must be a TOML table"):
+        load_config(p)
+
+
+def test_wrong_type_debug_section_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('debug = "not a table"\n')
+    with pytest.raises(ConfigError, match="debug must be a TOML table"):
+        load_config(p)

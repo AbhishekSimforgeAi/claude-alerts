@@ -60,18 +60,24 @@ def load_config(path: Path) -> Config:
     overrides: dict[str, object] = {}
 
     colors = data.get("colors", {})
+    if not isinstance(colors, dict):
+        raise ConfigError("colors must be a TOML table")
     if "working" in colors:
         overrides["color_working"] = _require_str(colors["working"], "colors.working")
     if "waiting" in colors:
         overrides["color_waiting"] = _require_str(colors["waiting"], "colors.waiting")
 
     border = data.get("border", {})
+    if not isinstance(border, dict):
+        raise ConfigError("border must be a TOML table")
     if "thickness_px" in border:
         overrides["border_thickness_px"] = _require_int(
             border["thickness_px"], "border.thickness_px"
         )
 
     debug = data.get("debug", {})
+    if not isinstance(debug, dict):
+        raise ConfigError("debug must be a TOML table")
     if "log_level" in debug:
         overrides["log_level"] = _require_str(debug["log_level"], "debug.log_level")
 
