@@ -64,3 +64,62 @@ def test_preserves_other_users_hooks(tmp_path):
     pretool = data["hooks"]["PreToolUse"]
     assert any("/other/hook.sh" in json.dumps(item) for item in pretool)
     assert any(HOOK_PATH in json.dumps(item) for item in pretool)
+
+
+def test_handles_hooks_as_list(tmp_path):
+    """If existing settings has 'hooks': [], we should not crash; we should reset to dict."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": [], "theme": "dark"}))
+    install_hooks.merge_hooks_into(settings, HOOK_PATH)
+    data = json.loads(settings.read_text())
+    assert data["theme"] == "dark"
+    assert isinstance(data["hooks"], dict)
+    for evt in HOOK_EVENTS:
+        assert evt in data["hooks"]
+
+
+def test_handles_event_as_string(tmp_path):
+    """If a hook event value is a string instead of a list, we should reset that event to a list."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "hooks": {"PreToolUse": "this-should-be-a-list"}
+    }))
+    install_hooks.merge_hooks_into(settings, HOOK_PATH)
+    data = json.loads(settings.read_text())
+    assert isinstance(data["hooks"]["PreToolUse"], list)
+    # Our hook is now in the list
+    assert any(HOOK_PATH in json.dumps(item) for item in data["hooks"]["PreToolUse"])
+
+
+def test_idempotency_does_not_false_positive_on_path_prefix(tmp_path):
+    """A different hook whose command happens to share a prefix with hook_path must not block install."""
+    settings = tmp_path / "settings.json"
+    other_command = HOOK_PATH + "-something-else.sh PreToolUse"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "PreToolUse": [
+                {"hooks": [{"type": "command", "command": other_command}]}
+            ]
+        }
+    }))
+    install_hooks.merge_hooks_into(settings, HOOK_PATH)
+    data = json.loads(settings.read_text())
+    pretool = data["hooks"]["PreToolUse"]
+    # Both the prefix-sharing hook AND our hook should be present
+    assert any(other_command in json.dumps(item) for item in pretool)
+    target_command = f"{HOOK_PATH} PreToolUse"
+    assert any(
+        any(h.get("command") == target_command for h in item.get("hooks", []))
+        for item in pretool
+    )
+
+
+def test_preserves_file_permissions(tmp_path):
+    """If settings.json was 0600, it should remain 0600 after merge."""
+    import stat
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"existing": "data"}))
+    settings.chmod(0o600)
+    install_hooks.merge_hooks_into(settings, HOOK_PATH)
+    mode = stat.S_IMODE(settings.stat().st_mode)
+    assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
