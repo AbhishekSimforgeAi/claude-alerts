@@ -41,12 +41,24 @@ class Binder:
         if session is None:
             return
 
-        wid = self.x11.get_active_window_id()
+        try:
+            wid = self.x11.get_active_window_id()
+        except Exception as e:
+            log.warning("session %s: x11 query for active window failed: %s; queueing manual bind", session_id, e)
+            self._enqueue(session_id)
+            return
+
         if wid is None:
             self._enqueue(session_id)
             return
 
-        wm_class = self.x11.get_wm_class(wid)
+        try:
+            wm_class = self.x11.get_wm_class(wid)
+        except Exception as e:
+            log.warning("session %s: x11 query for wm_class failed: %s; queueing manual bind", session_id, e)
+            self._enqueue(session_id)
+            return
+
         if not looks_like_terminal(wm_class):
             log.info(
                 "session %s: active window %#x has WM_CLASS %r, queueing manual bind",
@@ -64,6 +76,7 @@ class Binder:
         self.store.set_bound_window(session_id, window_id)
         if session_id in self._pending:
             self._pending.remove(session_id)
+        log.info("session %s manually bound to window %#x", session_id, window_id)
 
     def pending_manual_binds(self) -> list[str]:
         return list(self._pending)
@@ -72,6 +85,7 @@ class Binder:
         """Called when a bound window has been destroyed."""
         for s in self.store.all():
             if s.bound_window_id == window_id:
+                log.info("session %s: window %#x destroyed, unbound", s.session_id, window_id)
                 self.store.set_bound_window(s.session_id, None)
 
     def _enqueue(self, session_id: str) -> None:

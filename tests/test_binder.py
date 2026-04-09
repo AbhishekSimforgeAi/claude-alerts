@@ -114,3 +114,33 @@ def test_unbind_window_clears_binding_for_destroyed_window():
     assert store.get("s1").bound_window_id == 0xFF
     binder.unbind_window(0xFF)
     assert store.get("s1").bound_window_id is None
+
+
+def test_try_bind_handles_x11_exception_on_active_window():
+    """If x11.get_active_window_id raises, the session is queued for manual bind, not crashed."""
+    class BrokenX11:
+        def get_active_window_id(self):
+            raise RuntimeError("display connection lost")
+        def get_wm_class(self, wid):
+            return ""
+    store = SessionStore()
+    binder = Binder(store, BrokenX11())
+    store.apply_event(evt("SessionStart"))
+    binder.try_bind("s1")
+    assert store.get("s1").bound_window_id is None
+    assert binder.pending_manual_binds() == ["s1"]
+
+
+def test_try_bind_handles_x11_exception_on_wm_class():
+    """If x11.get_wm_class raises, the session is queued, not crashed."""
+    class PartiallyBrokenX11:
+        def get_active_window_id(self):
+            return 0xAB
+        def get_wm_class(self, wid):
+            raise RuntimeError("BadWindow")
+    store = SessionStore()
+    binder = Binder(store, PartiallyBrokenX11())
+    store.apply_event(evt("SessionStart"))
+    binder.try_bind("s1")
+    assert store.get("s1").bound_window_id is None
+    assert binder.pending_manual_binds() == ["s1"]
