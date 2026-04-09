@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from Xlib import X, Xatom
+from Xlib import X
 from Xlib.ext import shape
 
 from claude_alerts.config import Config
@@ -40,11 +39,6 @@ class _OverlayWindow:
             background_pixel=color_pixel,
             event_mask=X.ExposureMask | X.VisibilityChangeMask,
         )
-        # _NET_WM_STATE is a list of ATOMs, so the property type must be ATOM (not AnyPropertyType,
-        # which is only valid for get_property queries).
-        self.win.change_property(
-            x11._NET_WM_STATE, Xatom.ATOM, 32, [x11._NET_WM_STATE_ABOVE],
-        )
         self._apply_shape(target_geo)
         self.win.map()
         x11.flush()
@@ -52,18 +46,18 @@ class _OverlayWindow:
     def _apply_shape(self, geo: Geometry) -> None:
         """Restrict the overlay's input region to just the border edges so clicks pass through the middle."""
         t = self.thickness
+        # Clamp thickness to half the smaller dimension so we never produce negative-y rects.
+        t = min(t, max(1, geo.width // 2), max(1, geo.height // 2))
         edges = [
             (0, 0, geo.width, t),                              # top
             (0, geo.height - t, geo.width, t),                 # bottom
             (0, 0, t, geo.height),                             # left
             (geo.width - t, 0, t, geo.height),                 # right
         ]
-        # python-xlib exposes shape constants as SO_Set / SK_Input. The ordering constant
-        # lives in Xlib.X (X.YXBanded == 3).
         self.win.shape_rectangles(
-            shape.SO_Set,
-            shape.SK_Input,
-            X.YXBanded,
+            shape.SO.Set,
+            shape.SK.Input,
+            X.Unsorted,
             0, 0,
             edges,
         )
@@ -87,8 +81,8 @@ class _OverlayWindow:
         try:
             self.win.destroy()
             self.x11.flush()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("overlay window destroy failed (already gone?): %s", e)
 
 
 class OverlayManager:
