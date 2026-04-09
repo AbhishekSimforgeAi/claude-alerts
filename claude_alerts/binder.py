@@ -67,16 +67,34 @@ class Binder:
             self._enqueue(session_id)
             return
 
-        self.store.set_bound_window(session_id, wid)
-        log.info("session %s bound to window %#x", session_id, wid)
+        # Resolve client window to its frame (top-level child of root) so that
+        # ConfigureNotify and DestroyNotify from root substructure events match.
+        try:
+            frame_wid = self.x11.get_frame_window_id(wid)
+        except Exception as e:
+            log.warning("session %s: failed to resolve frame window for %#x: %s", session_id, wid, e)
+            self._enqueue(session_id)
+            return
+
+        if frame_wid is None:
+            log.warning("session %s: could not find frame window for client %#x", session_id, wid)
+            self._enqueue(session_id)
+            return
+
+        self.store.set_bound_window(session_id, frame_wid)
+        log.info("session %s bound to client %#x (frame %#x)", session_id, wid, frame_wid)
 
     def complete_manual_bind(self, session_id: str, window_id: int) -> None:
         if self.store.get(session_id) is None:
             return
-        self.store.set_bound_window(session_id, window_id)
+        frame_wid = self.x11.get_frame_window_id(window_id)
+        if frame_wid is None:
+            # The clicked window may already be a top-level frame; fall back to it.
+            frame_wid = window_id
+        self.store.set_bound_window(session_id, frame_wid)
         if session_id in self._pending:
             self._pending.remove(session_id)
-        log.info("session %s manually bound to window %#x", session_id, window_id)
+        log.info("session %s manually bound to frame %#x", session_id, frame_wid)
 
     def pending_manual_binds(self) -> list[str]:
         return list(self._pending)

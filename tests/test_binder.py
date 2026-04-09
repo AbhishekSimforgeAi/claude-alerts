@@ -15,6 +15,10 @@ class FakeX11:
     def get_wm_class(self, window_id):
         return self.wm_classes.get(window_id, "")
 
+    def get_frame_window_id(self, window_id):
+        # Identity by default — the wid IS the frame.
+        return window_id
+
 
 def evt(event="SessionStart", session_id="s1", t=1.0):
     return ClaudeEvent(
@@ -140,6 +144,47 @@ def test_try_bind_handles_x11_exception_on_wm_class():
             raise RuntimeError("BadWindow")
     store = SessionStore()
     binder = Binder(store, PartiallyBrokenX11())
+    store.apply_event(evt("SessionStart"))
+    binder.try_bind("s1")
+    assert store.get("s1").bound_window_id is None
+    assert binder.pending_manual_binds() == ["s1"]
+
+
+def test_try_bind_uses_frame_window_id():
+    """The binder must store the frame window id, not the client window id."""
+    class FrameAwareX11:
+        def __init__(self):
+            self.active_window_id = 0xCC11
+            self.wm_classes = {0xCC11: "gnome-terminal-server"}
+            # frame map: client -> frame
+            self.frames = {0xCC11: 0xFF22}
+        def get_active_window_id(self):
+            return self.active_window_id
+        def get_wm_class(self, wid):
+            return self.wm_classes.get(wid, "")
+        def get_frame_window_id(self, wid):
+            return self.frames.get(wid)
+
+    store = SessionStore()
+    binder = Binder(store, FrameAwareX11())
+    store.apply_event(evt("SessionStart"))
+    binder.try_bind("s1")
+    # Should be the FRAME id, not the client id
+    assert store.get("s1").bound_window_id == 0xFF22
+
+
+def test_try_bind_queues_when_frame_resolution_fails():
+    """If frame resolution returns None, the session should fall back to manual bind."""
+    class NoFrameX11:
+        def get_active_window_id(self):
+            return 0xAB
+        def get_wm_class(self, wid):
+            return "gnome-terminal-server"
+        def get_frame_window_id(self, wid):
+            return None
+
+    store = SessionStore()
+    binder = Binder(store, NoFrameX11())
     store.apply_event(evt("SessionStart"))
     binder.try_bind("s1")
     assert store.get("s1").bound_window_id is None

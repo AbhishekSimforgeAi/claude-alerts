@@ -54,12 +54,14 @@ class _OverlayWindow:
             (0, 0, t, geo.height),                             # left
             (geo.width - t, 0, t, geo.height),                 # right
         ]
+        # Set both bounding and input shapes to the four edge rectangles.
+        # Bounding: restricts the visible (and hit-test) region to just the borders.
+        # Input: restricts where clicks are received — clicks on the transparent middle pass through.
         self.win.shape_rectangles(
-            shape.SO.Set,
-            shape.SK.Input,
-            X.Unsorted,
-            0, 0,
-            edges,
+            shape.SO.Set, shape.SK.Bounding, X.Unsorted, 0, 0, edges,
+        )
+        self.win.shape_rectangles(
+            shape.SO.Set, shape.SK.Input, X.Unsorted, 0, 0, edges,
         )
 
     def update_geometry(self, geo: Geometry) -> None:

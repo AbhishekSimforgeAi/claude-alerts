@@ -87,6 +87,33 @@ class X11Client:
         self.root.change_attributes(event_mask=X.SubstructureNotifyMask)
         self.display.flush()
 
+    def get_frame_window_id(self, client_window_id: int) -> Optional[int]:
+        """Walk up the window tree to find the topmost ancestor that is a direct child of root.
+
+        On reparenting window managers (GNOME Shell / Mutter, KWin, etc.), client windows
+        are nested inside frame windows owned by the WM. _NET_ACTIVE_WINDOW returns the client
+        window ID, but SubstructureNotifyMask on root delivers events for the frame window.
+        To make ConfigureNotify and DestroyNotify match what the binder stored, the binder
+        must record the frame window ID, not the client ID. This helper resolves it.
+
+        Returns the frame window ID, or None if the input is invalid or already root.
+        """
+        try:
+            win = self.display.create_resource_object("window", client_window_id)
+            root_id = self.root.id
+            for _ in range(32):  # generous bound to prevent infinite loops on broken WMs
+                tree = win.query_tree()
+                parent = tree.parent
+                if parent is None:
+                    return None
+                if parent.id == root_id:
+                    return win.id
+                win = parent
+            return None
+        except (xerr.XError, ConnectionError) as e:
+            log.debug("get_frame_window_id(%#x) failed: %s", client_window_id, e)
+            return None
+
     def pending_events(self) -> int:
         return self.display.pending_events()
 
