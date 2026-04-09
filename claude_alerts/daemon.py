@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import select
 import threading
 import time
@@ -32,18 +33,19 @@ class Daemon:
         self.x11 = X11Client()
         self.binder = Binder(self.store, self.x11)
         self.overlay = OverlayManager(self.x11, self.store, self.config)
-        self.ingester = EventIngester(self.events_dir, on_event=self._on_event)
+        # Marshal ingester events to the main thread via a thread-safe queue.
+        # python-xlib is NOT thread-safe — all X11 calls must run on the main thread.
+        self._event_queue: "queue.SimpleQueue[ClaudeEvent]" = queue.SimpleQueue()
+        self.ingester = EventIngester(self.events_dir, on_event=self._event_queue.put)
         self._stop = threading.Event()
         self._ingester_thread: threading.Thread | None = None
         self._last_sweep = time.monotonic()
 
     def _on_event(self, evt: ClaudeEvent) -> None:
+        """Runs on the main thread only — drained from the queue in run()."""
         is_new = self.store.get(evt.session_id) is None
         self.store.apply_event(evt)
         if is_new and self.store.get(evt.session_id) is not None:
-            # Try to bind. The binder calls store.set_bound_window which fires
-            # the on_change callback the overlay is subscribed to, so the overlay
-            # will be created automatically without an explicit call here.
             self.binder.try_bind(evt.session_id)
 
     def run(self) -> None:
@@ -53,20 +55,37 @@ class Daemon:
 
         x_fd = self.x11.fileno()
         log.info("daemon running; events_dir=%s", self.events_dir)
-        while not self._stop.is_set():
-            try:
-                ready, _, _ = select.select([x_fd], [], [], 1.0)
-            except InterruptedError:
-                continue
+        try:
+            while not self._stop.is_set():
+                try:
+                    ready, _, _ = select.select([x_fd], [], [], 1.0)
+                except InterruptedError:
+                    continue
 
-            if x_fd in ready or self.x11.pending_events():
-                while self.x11.pending_events():
-                    self._handle_x_event(self.x11.next_event())
+                # Drain X11 events first (highest priority — geometry/destroy notifications).
+                if x_fd in ready or self.x11.pending_events():
+                    while self.x11.pending_events():
+                        self._handle_x_event(self.x11.next_event())
 
-            now = time.monotonic()
-            if now - self._last_sweep >= IDLE_SWEEP_INTERVAL_S:
-                self.store.evict_idle(now=time.time(), max_age_s=IDLE_MAX_AGE_S)
-                self._last_sweep = now
+                # Drain ingester events on the main thread (NOT the ingester thread).
+                while True:
+                    try:
+                        evt = self._event_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        self._on_event(evt)
+                    except Exception:
+                        log.exception("error processing event %r", evt)
+
+                # Periodic idle sweep.
+                now = time.monotonic()
+                if now - self._last_sweep >= IDLE_SWEEP_INTERVAL_S:
+                    self.store.evict_idle(now=time.time(), max_age_s=IDLE_MAX_AGE_S)
+                    self._last_sweep = now
+        finally:
+            log.info("daemon stopping")
+            self.ingester.stop()
 
     def stop(self) -> None:
         self._stop.set()

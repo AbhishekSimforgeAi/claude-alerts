@@ -45,10 +45,24 @@ def main() -> int:
     configure_logging(cfg.log_level, log_path)
 
     events_dir = args.events_dir or default_events_dir()
-    daemon = Daemon(events_dir=events_dir, config=cfg)
+
+    try:
+        daemon = Daemon(events_dir=events_dir, config=cfg)
+    except Exception as e:
+        msg = f"claude-alerts: cannot start daemon: {e}"
+        print(msg, file=sys.stderr)
+        logging.getLogger().exception("daemon initialization failed")
+        return 1
+
     try:
         daemon.run()
     except KeyboardInterrupt:
+        pass
+    except Exception:
+        logging.getLogger().exception("daemon crashed")
+        daemon.stop()
+        return 1
+    finally:
         daemon.stop()
     return 0
 

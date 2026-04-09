@@ -112,13 +112,6 @@ class OverlayManager:
             if s.bound_window_id == window_id and s.session_id in self._overlays:
                 self._overlays[s.session_id].update_geometry(geo)
 
-    def on_window_destroyed(self, window_id: int) -> None:
-        for s in self.store.all():
-            if s.bound_window_id == window_id:
-                self._destroy(s.session_id)
-                # The binder is responsible for clearing s.bound_window_id via store.set_bound_window;
-                # we just hide the overlay here.
-
     def refresh_all_geometry(self) -> None:
         for s in self.store.all():
             if s.bound_window_id and s.session_id in self._overlays:
