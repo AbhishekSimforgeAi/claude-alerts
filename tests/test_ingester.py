@@ -98,3 +98,56 @@ def test_moves_malformed_file_to_rejected(tmp_path):
         assert received == []
     finally:
         ingester.stop()
+
+
+def test_callback_exception_does_not_kill_ingester(tmp_path):
+    """A buggy callback should not stop the ingester from processing later events."""
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    received = []
+    call_count = [0]
+
+    def callback(evt):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise RuntimeError("first call boom")
+        received.append(evt)
+
+    ingester = EventIngester(events_dir, on_event=callback)
+    run_ingester_in_thread(ingester)
+    try:
+        write_event_atomically(events_dir, good_payload("first"), name="a")
+        # Wait for first call to happen (and raise)
+        assert wait_for(lambda: call_count[0] >= 1)
+        # Second event should still be processed despite the first one raising
+        write_event_atomically(events_dir, good_payload("second"), name="b")
+        assert wait_for(lambda: len(received) == 1)
+        assert received[0].session_id == "second"
+        # Both files should be deleted (first was processed even though callback raised)
+        assert list(events_dir.glob("*.json")) == []
+    finally:
+        ingester.stop()
+
+
+def test_inotify_fd_closed_after_stop(tmp_path):
+    """The inotify fd should be released when run() exits."""
+    import os
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    ingester = EventIngester(events_dir, on_event=lambda e: None)
+    t = run_ingester_in_thread(ingester)
+    # Wait for inotify to be initialized
+    assert wait_for(lambda: ingester._inotify is not None)
+    fd = ingester._inotify.fileno()
+    ingester.stop()
+    t.join(timeout=2)
+    assert not t.is_alive(), "ingester thread did not exit"
+    # After run() returns, the fd should be closed.
+    # On Linux, fstat on a closed fd raises OSError with EBADF.
+    import errno
+    try:
+        os.fstat(fd)
+        closed = False
+    except OSError as e:
+        closed = (e.errno == errno.EBADF)
+    assert closed, "inotify fd was not closed after stop"

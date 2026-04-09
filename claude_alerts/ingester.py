@@ -26,25 +26,31 @@ class EventIngester:
         self._inotify: INotify | None = None
 
     def run(self) -> None:
-        """Blocking event loop. Drains backlog, then watches with inotify."""
+        """Blocking event loop. Installs inotify watch, drains backlog, then reads events."""
         self._inotify = INotify()
-        watch_flags = flags.MOVED_TO | flags.CLOSE_WRITE | flags.Q_OVERFLOW
-        self._inotify.add_watch(str(self.events_dir), watch_flags)
+        try:
+            watch_flags = flags.MOVED_TO | flags.CLOSE_WRITE | flags.Q_OVERFLOW
+            self._inotify.add_watch(str(self.events_dir), watch_flags)
 
-        # Drain backlog AFTER the watch is registered so files written in the
-        # gap between process start and watch registration are not lost.
-        self._drain_backlog()
+            # Drain backlog AFTER the watch is registered so any file that arrives
+            # during the drain is queued by the kernel and picked up later (idempotently).
+            self._drain_backlog()
 
-        while not self._stop.is_set():
-            for event in self._inotify.read(timeout=200):
-                if event.mask & flags.Q_OVERFLOW:
-                    log.warning("inotify queue overflow; rescanning directory")
-                    self._drain_backlog()
-                    continue
-                name = event.name
-                if not name or not name.endswith(".json"):
-                    continue
-                self._process_file(self.events_dir / name)
+            while not self._stop.is_set():
+                for event in self._inotify.read(timeout=200):
+                    if event.mask & flags.Q_OVERFLOW:
+                        log.warning("inotify queue overflow; rescanning directory")
+                        self._drain_backlog()
+                        continue
+                    name = event.name
+                    if not name or not name.endswith(".json"):
+                        continue
+                    self._process_file(self.events_dir / name)
+        finally:
+            try:
+                self._inotify.close()
+            except OSError:
+                pass
 
     def stop(self) -> None:
         self._stop.set()
@@ -62,13 +68,16 @@ class EventIngester:
             log.warning("rejecting %s: %s", path.name, e)
             try:
                 path.rename(self.rejected_dir / path.name)
-            except OSError:
-                pass
+            except OSError as rename_err:
+                log.error("failed to move %s to rejected/: %s", path.name, rename_err)
             return
         try:
-            self.on_event(evt)
+            try:
+                self.on_event(evt)
+            except Exception:
+                log.exception("on_event callback raised for %s; file will be deleted anyway", path.name)
         finally:
             try:
                 path.unlink()
-            except OSError:
-                pass
+            except OSError as unlink_err:
+                log.warning("failed to unlink processed file %s: %s", path.name, unlink_err)
