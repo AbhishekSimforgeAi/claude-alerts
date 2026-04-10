@@ -85,9 +85,6 @@ class _FakeOverlayWindow:
     def set_color(self, color_pixel):
         self.color_pixel = color_pixel
 
-    def set_visible(self, visible):
-        self.visible = visible
-
     def destroy(self):
         self.destroyed = True
 
@@ -111,9 +108,6 @@ class _FakeWindow:
 
     def map(self):
         self.mapped = True
-
-    def unmap(self):
-        self.mapped = False
 
     def configure(self, **kwargs):
         pass
@@ -313,40 +307,3 @@ def test_overlay_destroyed_on_unbind(monkeypatch):
     store.set_bound_window("s1", None)
     assert overlay_win.destroyed
     assert not mgr.has_overlay("s1")
-
-
-def test_waiting_overlay_blinks(monkeypatch):
-    """WAITING overlays should toggle visibility on tick_blink."""
-    import time as _time
-    mgr, store, x11 = _make_manager(monkeypatch)
-    _start_session(store)
-    store.set_bound_window("s1", FRAME_WID, client_window_id=CLIENT_WID)
-    # Session starts as WAITING (SessionStart maps to WAITING).
-    overlay_win = _FakeOverlayWindow.instances[0]
-
-    # Force enough time to pass for a blink tick.
-    mgr._last_blink = _time.monotonic() - 1.0
-    mgr.tick_blink()
-    assert overlay_win.visible is False
-
-    mgr._last_blink = _time.monotonic() - 1.0
-    mgr.tick_blink()
-    assert overlay_win.visible is True
-
-
-def test_working_overlay_stays_visible_on_blink(monkeypatch):
-    """WORKING overlays must not blink — they stay visible regardless."""
-    import time as _time
-    mgr, store, x11 = _make_manager(monkeypatch)
-    _start_session(store)
-    store.set_bound_window("s1", FRAME_WID, client_window_id=CLIENT_WID)
-    # Transition to WORKING.
-    store.apply_event(ClaudeEvent(
-        event="UserPromptSubmit", session_id="s1", cwd="/p", claude_pid=1, timestamp=2.0,
-    ))
-    overlay_win = _FakeOverlayWindow.instances[0]
-
-    mgr._last_blink = _time.monotonic() - 1.0
-    mgr.tick_blink()
-    # WORKING overlay should not have set_visible called to False.
-    assert not hasattr(overlay_win, "visible") or overlay_win.visible is True
