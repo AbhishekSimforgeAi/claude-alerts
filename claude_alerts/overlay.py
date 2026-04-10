@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from Xlib import X, Xatom
 from Xlib.ext import shape
@@ -104,6 +105,13 @@ class _OverlayWindow:
         self.win.clear_area(0, 0, 0, 0, True)
         self.x11.flush()
 
+    def set_visible(self, visible: bool) -> None:
+        if visible:
+            self.win.map()
+        else:
+            self.win.unmap()
+        self.x11.flush()
+
     def destroy(self) -> None:
         try:
             self.win.destroy()
@@ -115,6 +123,8 @@ class _OverlayWindow:
 class OverlayManager:
     """One per daemon. Maintains an _OverlayWindow per bound session."""
 
+    BLINK_INTERVAL_S = 0.25
+
     def __init__(self, x11: X11Client, store: SessionStore, config: Config) -> None:
         self.x11 = x11
         self.store = store
@@ -122,6 +132,8 @@ class OverlayManager:
         self._overlays: dict[str, _OverlayWindow] = {}
         self._working_pixel = _rgb_to_pixel(hex_to_rgb(config.color_working))
         self._waiting_pixel = _rgb_to_pixel(hex_to_rgb(config.color_waiting))
+        self._blink_visible = True
+        self._last_blink = time.monotonic()
         store.on_change(self.on_session_changed)
 
     def color_for(self, status: Status) -> int:
@@ -166,6 +178,30 @@ class OverlayManager:
             return None
         return self.x11.get_visible_geometry(target)
 
+    def has_waiting_overlays(self) -> bool:
+        """True if any bound session is in WAITING state."""
+        for s in self.store.all():
+            if s.session_id in self._overlays and s.status == Status.WAITING:
+                return True
+        return False
+
+    def tick_blink(self) -> None:
+        """Toggle visibility of WAITING overlays. Call from the event loop."""
+        now = time.monotonic()
+        if now - self._last_blink < self.BLINK_INTERVAL_S:
+            return
+        self._last_blink = now
+        self._blink_visible = not self._blink_visible
+        for s in self.store.all():
+            ov = self._overlays.get(s.session_id)
+            if ov is None:
+                continue
+            if s.status == Status.WAITING:
+                ov.set_visible(self._blink_visible)
+            elif not self._blink_visible:
+                # Ensure WORKING overlays stay visible even if blink phase is off.
+                pass
+
     def has_overlay(self, session_id: str) -> bool:
         return session_id in self._overlays
 
@@ -187,6 +223,8 @@ class OverlayManager:
         else:
             existing.update_geometry(geo)
             existing.set_color(color_pixel)
+            if session.status == Status.WORKING:
+                existing.set_visible(True)
 
     def _destroy(self, session_id: str) -> None:
         ov = self._overlays.pop(session_id, None)

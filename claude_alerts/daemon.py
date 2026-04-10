@@ -64,8 +64,11 @@ class Daemon:
         log.info("daemon running; events_dir=%s", self.events_dir)
         try:
             while not self._stop.is_set():
+                # Use a shorter timeout when overlays are blinking so the
+                # blink animation stays smooth.
+                timeout = 0.25 if self.overlay.has_waiting_overlays() else 1.0
                 try:
-                    ready, _, _ = select.select([x_fd], [], [], 1.0)
+                    ready, _, _ = select.select([x_fd], [], [], timeout)
                 except InterruptedError:
                     continue
 
@@ -84,6 +87,9 @@ class Daemon:
                         self._on_event(evt)
                     except Exception:
                         log.exception("error processing event %r", evt)
+
+                # Blink waiting overlays.
+                self.overlay.tick_blink()
 
                 # Periodic idle sweep.
                 now = time.monotonic()
