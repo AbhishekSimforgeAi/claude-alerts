@@ -29,6 +29,29 @@ def wm_class_string(wm_class: Optional[Iterable[str]]) -> str:
     return str(items[0])
 
 
+def inset_by_frame_extents(
+    geo: "Geometry", extents: tuple[int, int, int, int]
+) -> "Geometry":
+    """Shrink a window's geometry by its _GTK_FRAME_EXTENTS shadow padding.
+
+    CSD apps (gnome-terminal, GNOME Console, etc.) draw their own decorations
+    inside the client window and reserve outer padding for the drop shadow.
+    The shadow area is part of the X11 client window's geometry but is
+    visually transparent — drawing a border at the client edge leaves a gap
+    around the visible window. Subtracting these extents gives the visible
+    decorated window edges.
+
+    extents is the (left, right, top, bottom) CARDINAL[4] from the property.
+    """
+    left, right, top, bottom = extents
+    return Geometry(
+        x=geo.x + left,
+        y=geo.y + top,
+        width=max(1, geo.width - left - right),
+        height=max(1, geo.height - top - bottom),
+    )
+
+
 class X11Client:
     """Owns the connection to the X server. One per daemon process."""
 
@@ -39,7 +62,12 @@ class X11Client:
         self._NET_ACTIVE_WINDOW = self.display.intern_atom("_NET_ACTIVE_WINDOW")
         self._NET_CLIENT_LIST = self.display.intern_atom("_NET_CLIENT_LIST")
         self._NET_WM_STATE = self.display.intern_atom("_NET_WM_STATE")
-        self._NET_WM_STATE_ABOVE = self.display.intern_atom("_NET_WM_STATE_ABOVE")
+        self._GTK_FRAME_EXTENTS = self.display.intern_atom("_GTK_FRAME_EXTENTS")
+        self._NET_WM_WINDOW_TYPE = self.display.intern_atom("_NET_WM_WINDOW_TYPE")
+        self._NET_WM_WINDOW_TYPE_UTILITY = self.display.intern_atom("_NET_WM_WINDOW_TYPE_UTILITY")
+        self._NET_WM_STATE_SKIP_TASKBAR = self.display.intern_atom("_NET_WM_STATE_SKIP_TASKBAR")
+        self._NET_WM_STATE_SKIP_PAGER = self.display.intern_atom("_NET_WM_STATE_SKIP_PAGER")
+        self._MOTIF_WM_HINTS = self.display.intern_atom("_MOTIF_WM_HINTS")
 
     def fileno(self) -> int:
         return self.display.fileno()
@@ -75,6 +103,34 @@ class X11Client:
         except (xerr.XError, ConnectionError) as e:
             log.debug("get_geometry(%#x) failed: %s", window_id, e)
             return None
+
+    def get_gtk_frame_extents(self, window_id: int) -> tuple[int, int, int, int]:
+        """Read _GTK_FRAME_EXTENTS (left, right, top, bottom) for a CSD client.
+
+        Returns (0, 0, 0, 0) if the property is unset, malformed, or the read
+        fails — which is the right answer for non-CSD clients (xterm, etc.).
+        """
+        try:
+            win = self.display.create_resource_object("window", window_id)
+            prop = win.get_full_property(self._GTK_FRAME_EXTENTS, X.AnyPropertyType)
+            if prop is not None and len(prop.value) >= 4:
+                vals = list(prop.value)[:4]
+                return (int(vals[0]), int(vals[1]), int(vals[2]), int(vals[3]))
+        except (xerr.XError, ConnectionError) as e:
+            log.debug("get_gtk_frame_extents(%#x) failed: %s", window_id, e)
+        return (0, 0, 0, 0)
+
+    def get_visible_geometry(self, window_id: int) -> Optional[Geometry]:
+        """Geometry of the visible portion of a window.
+
+        For CSD apps this excludes the _GTK_FRAME_EXTENTS drop-shadow padding;
+        for plain SSD or borderless apps it returns the same value as
+        get_geometry. This is what overlays should size themselves to.
+        """
+        geo = self.get_geometry(window_id)
+        if geo is None:
+            return None
+        return inset_by_frame_extents(geo, self.get_gtk_frame_extents(window_id))
 
     def list_top_level_windows(self) -> list[int]:
         prop = self.root.get_full_property(self._NET_CLIENT_LIST, X.AnyPropertyType)

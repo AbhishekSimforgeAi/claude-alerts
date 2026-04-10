@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from Xlib import X
+from Xlib import X, Xatom
 from Xlib.ext import shape
 
 from claude_alerts.config import Config
@@ -28,18 +28,47 @@ def _rgb_to_pixel(rgb: tuple[int, int, int]) -> int:
 class _OverlayWindow:
     """One overlay window tracking one terminal."""
 
-    def __init__(self, x11: X11Client, target_geo: Geometry, color_pixel: int, thickness: int) -> None:
+    def __init__(
+        self,
+        x11: X11Client,
+        target_geo: Geometry,
+        color_pixel: int,
+        thickness: int,
+        transient_for_window_id: int,
+    ) -> None:
         self.x11 = x11
         self.thickness = thickness
         self.color_pixel = color_pixel
         self.win = x11.screen.root.create_window(
             target_geo.x, target_geo.y, target_geo.width, target_geo.height, 0,
             X.CopyFromParent, X.InputOutput, X.CopyFromParent,
-            override_redirect=1,
             background_pixel=color_pixel,
-            event_mask=X.ExposureMask | X.VisibilityChangeMask,
+            event_mask=X.ExposureMask,
         )
         self._apply_shape(target_geo)
+        # Set WM hints so the overlay stacks with its terminal, has no
+        # decorations, and stays out of taskbar / alt-tab.
+        try:
+            self.win.change_property(
+                Xatom.WM_TRANSIENT_FOR, Xatom.WINDOW, 32,
+                [transient_for_window_id],
+            )
+            self.win.change_property(
+                x11._NET_WM_WINDOW_TYPE, Xatom.ATOM, 32,
+                [x11._NET_WM_WINDOW_TYPE_UTILITY],
+            )
+            self.win.change_property(
+                x11._NET_WM_STATE, Xatom.ATOM, 32,
+                [x11._NET_WM_STATE_SKIP_TASKBAR, x11._NET_WM_STATE_SKIP_PAGER],
+            )
+            # _MOTIF_WM_HINTS: flags=2 (decorations bit), functions=0, decorations=0,
+            # input_mode=0, status=0 — suppress titlebar/border.
+            self.win.change_property(
+                x11._MOTIF_WM_HINTS, x11._MOTIF_WM_HINTS, 32,
+                [2, 0, 0, 0, 0],
+            )
+        except Exception as e:
+            log.debug("failed to set WM hints on overlay: %s", e)
         self.win.map()
         x11.flush()
 
@@ -75,10 +104,6 @@ class _OverlayWindow:
         self.win.clear_area(0, 0, 0, 0, True)
         self.x11.flush()
 
-    def raise_above(self) -> None:
-        self.win.configure(stack_mode=X.Above)
-        self.x11.flush()
-
     def destroy(self) -> None:
         try:
             self.win.destroy()
@@ -110,21 +135,36 @@ class OverlayManager:
         self._sync_one(session)
 
     def on_window_configure(self, window_id: int, geo: Geometry) -> None:
+        # ConfigureNotify on root substructure delivers events for the FRAME
+        # (the top-level child of root), but the overlay is sized to the inner
+        # client window so the border hugs the actual terminal content. When the
+        # frame moves, the client moves with it but its root coordinates change,
+        # so we re-fetch the client's geometry rather than reusing the frame geo.
         for s in self.store.all():
             if s.bound_window_id == window_id and s.session_id in self._overlays:
-                self._overlays[s.session_id].update_geometry(geo)
+                client_geo = self._client_geometry(s)
+                if client_geo is not None:
+                    self._overlays[s.session_id].update_geometry(client_geo)
 
     def refresh_all_geometry(self) -> None:
         for s in self.store.all():
             if s.bound_window_id and s.session_id in self._overlays:
-                geo = self.x11.get_geometry(s.bound_window_id)
+                geo = self._client_geometry(s)
                 if geo is not None:
                     self._overlays[s.session_id].update_geometry(geo)
 
-    def raise_all(self) -> None:
-        """Re-raise every overlay above the stack. Called on VisibilityNotify."""
-        for ov in self._overlays.values():
-            ov.raise_above()
+    def _client_geometry(self, session: Session) -> Geometry | None:
+        """Visible geometry of the bound window.
+
+        Uses the client window id (the EWMH active window) and applies
+        _GTK_FRAME_EXTENTS so CSD apps' drop-shadow padding is excluded.
+        Falls back to the frame id when client_window_id is unset (e.g.
+        legacy sessions or non-reparenting environments).
+        """
+        target = session.client_window_id or session.bound_window_id
+        if target is None:
+            return None
+        return self.x11.get_visible_geometry(target)
 
     def has_overlay(self, session_id: str) -> bool:
         return session_id in self._overlays
@@ -133,7 +173,7 @@ class OverlayManager:
         if session.bound_window_id is None:
             self._destroy(session.session_id)
             return
-        geo = self.x11.get_geometry(session.bound_window_id)
+        geo = self._client_geometry(session)
         if geo is None:
             self._destroy(session.session_id)
             return
@@ -142,6 +182,7 @@ class OverlayManager:
         if existing is None:
             self._overlays[session.session_id] = _OverlayWindow(
                 self.x11, geo, color_pixel, self.config.border_thickness_px,
+                transient_for_window_id=session.bound_window_id,
             )
         else:
             existing.update_geometry(geo)

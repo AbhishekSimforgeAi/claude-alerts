@@ -29,7 +29,12 @@ def tracking_daemon(monkeypatch, tmp_path):
             self._NET_ACTIVE_WINDOW = 0
             self._NET_CLIENT_LIST = 0
             self._NET_WM_STATE = 0
-            self._NET_WM_STATE_ABOVE = 0
+            self._GTK_FRAME_EXTENTS = 0
+            self._NET_WM_WINDOW_TYPE = 0
+            self._NET_WM_WINDOW_TYPE_UTILITY = 0
+            self._NET_WM_STATE_SKIP_TASKBAR = 0
+            self._NET_WM_STATE_SKIP_PAGER = 0
+            self._MOTIF_WM_HINTS = 0
         def fileno(self):
             # A pipe whose read end never has data — keeps select() blocking.
             import os

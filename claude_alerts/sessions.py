@@ -20,7 +20,7 @@ class Status(enum.Enum):
 _EVENT_TO_STATUS = {
     "SessionStart": Status.WAITING,
     "UserPromptSubmit": Status.WORKING,
-    "PreToolUse": Status.WORKING,
+    "PreToolUse": Status.WAITING,
     "PostToolUse": Status.WORKING,
     "Stop": Status.WAITING,
     "Notification": Status.WAITING,
@@ -35,6 +35,7 @@ class Session:
     status: Status
     last_event_at: float
     bound_window_id: Optional[int] = None
+    client_window_id: Optional[int] = None
 
 
 class SessionStore:
@@ -103,14 +104,33 @@ class SessionStore:
             self._notify(sid)
         return evicted
 
-    def set_bound_window(self, session_id: str, window_id: Optional[int]) -> None:
-        """Update a session's bound window id and notify subscribers if it changed."""
+    def set_bound_window(
+        self,
+        session_id: str,
+        window_id: Optional[int],
+        client_window_id: Optional[int] = None,
+    ) -> None:
+        """Update a session's bound (frame) window id and optional client window id.
+
+        bound_window_id is what the daemon matches against root substructure events
+        (ConfigureNotify, DestroyNotify) — the top-level frame on reparenting WMs.
+        client_window_id is the inner content window the overlay sizes itself to,
+        so the border hugs the actual terminal content rather than the WM decoration
+        / invisible resize borders. Notifies once if either field changed.
+        """
         session = self._sessions.get(session_id)
         if session is None:
             return
-        if session.bound_window_id == window_id:
+        # When unbinding (window_id=None), also clear the client id even if the caller
+        # didn't pass it — they're conceptually a pair.
+        new_client = None if window_id is None else client_window_id
+        if (
+            session.bound_window_id == window_id
+            and session.client_window_id == new_client
+        ):
             return
         session.bound_window_id = window_id
+        session.client_window_id = new_client
         self._notify(session_id)
 
     def _notify(self, session_id: str) -> None:

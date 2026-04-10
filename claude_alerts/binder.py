@@ -81,7 +81,7 @@ class Binder:
             self._enqueue(session_id)
             return
 
-        self.store.set_bound_window(session_id, frame_wid)
+        self.store.set_bound_window(session_id, frame_wid, client_window_id=wid)
         log.info("session %s bound to client %#x (frame %#x)", session_id, wid, frame_wid)
 
     def complete_manual_bind(self, session_id: str, window_id: int) -> None:
@@ -91,7 +91,8 @@ class Binder:
         if frame_wid is None:
             # The clicked window may already be a top-level frame; fall back to it.
             frame_wid = window_id
-        self.store.set_bound_window(session_id, frame_wid)
+        # Treat the input as the client; if it was already a frame, client == frame.
+        self.store.set_bound_window(session_id, frame_wid, client_window_id=window_id)
         if session_id in self._pending:
             self._pending.remove(session_id)
         log.info("session %s manually bound to frame %#x", session_id, frame_wid)

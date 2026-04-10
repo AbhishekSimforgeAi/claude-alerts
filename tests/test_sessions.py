@@ -23,11 +23,12 @@ def test_user_prompt_submit_sets_working():
     assert store.get("s1").status == Status.WORKING
 
 
-def test_pre_tool_use_sets_working():
+def test_pre_tool_use_sets_waiting():
+    """PreToolUse means Claude is asking for permission — the user needs to act."""
     store = SessionStore()
     store.apply_event(evt("SessionStart"))
     store.apply_event(evt("PreToolUse", t=2.0))
-    assert store.get("s1").status == Status.WORKING
+    assert store.get("s1").status == Status.WAITING
 
 
 def test_post_tool_use_keeps_working():
@@ -74,8 +75,8 @@ def test_on_change_callback_fires_on_status_change():
     seen = []
     store.on_change(lambda sid: seen.append(sid))
     store.apply_event(evt("SessionStart"))  # creates -> change
-    store.apply_event(evt("PreToolUse", t=2.0))  # waiting -> working
-    store.apply_event(evt("PreToolUse", t=3.0))  # working -> working: NO change
+    store.apply_event(evt("UserPromptSubmit", t=2.0))  # waiting -> working
+    store.apply_event(evt("UserPromptSubmit", t=3.0))  # working -> working: NO change
     assert seen == ["s1", "s1"]
 
 
@@ -145,6 +146,29 @@ def test_set_bound_window_unknown_session_is_noop():
     store.on_change(lambda sid: seen.append(sid))
     store.set_bound_window("ghost", 0x42)
     assert seen == []
+
+
+def test_set_bound_window_stores_client_window_id():
+    """The store must remember both the frame (bound) and client window ids,
+    so the overlay can size itself to the actual terminal content area while
+    the daemon still matches ConfigureNotify by frame id."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.set_bound_window("s1", 0xFF22, client_window_id=0xCC11)
+    s = store.get("s1")
+    assert s.bound_window_id == 0xFF22
+    assert s.client_window_id == 0xCC11
+
+
+def test_set_bound_window_clears_client_when_unbinding():
+    """Clearing the bound window (window destroyed) must also clear client_window_id."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.set_bound_window("s1", 0xFF22, client_window_id=0xCC11)
+    store.set_bound_window("s1", None)
+    s = store.get("s1")
+    assert s.bound_window_id is None
+    assert s.client_window_id is None
 
 
 def test_one_buggy_listener_does_not_break_others():

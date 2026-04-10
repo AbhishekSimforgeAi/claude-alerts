@@ -173,6 +173,48 @@ def test_try_bind_uses_frame_window_id():
     assert store.get("s1").bound_window_id == 0xFF22
 
 
+def test_try_bind_stores_client_window_id_alongside_frame():
+    """The binder must record the original (client) window id so the overlay
+    can size itself to the terminal content area, while bound_window_id stays
+    as the frame id for substructure event matching."""
+    class FrameAwareX11:
+        def __init__(self):
+            self.active_window_id = 0xCC11
+            self.wm_classes = {0xCC11: "gnome-terminal-server"}
+            self.frames = {0xCC11: 0xFF22}
+        def get_active_window_id(self):
+            return self.active_window_id
+        def get_wm_class(self, wid):
+            return self.wm_classes.get(wid, "")
+        def get_frame_window_id(self, wid):
+            return self.frames.get(wid)
+
+    store = SessionStore()
+    binder = Binder(store, FrameAwareX11())
+    store.apply_event(evt("SessionStart"))
+    binder.try_bind("s1")
+    s = store.get("s1")
+    assert s.bound_window_id == 0xFF22
+    assert s.client_window_id == 0xCC11
+
+
+def test_complete_manual_bind_stores_client_window_id():
+    """Manual binding should also record the client id (the input window id)
+    in addition to resolving the frame for event matching."""
+    class FrameAwareX11:
+        def get_frame_window_id(self, wid):
+            # input is the client; frame is something else.
+            return 0xFF22 if wid == 0xCC11 else None
+
+    store = SessionStore()
+    binder = Binder(store, FrameAwareX11())
+    store.apply_event(evt("SessionStart"))
+    binder.complete_manual_bind("s1", 0xCC11)
+    s = store.get("s1")
+    assert s.bound_window_id == 0xFF22
+    assert s.client_window_id == 0xCC11
+
+
 def test_try_bind_queues_when_frame_resolution_fails():
     """If frame resolution returns None, the session should fall back to manual bind."""
     class NoFrameX11:

@@ -42,11 +42,18 @@ class Daemon:
         self._last_sweep = time.monotonic()
 
     def _on_event(self, evt: ClaudeEvent) -> None:
-        """Runs on the main thread only — drained from the queue in run()."""
-        is_new = self.store.get(evt.session_id) is None
+        """Runs on the main thread only — drained from the queue in run().
+
+        Binding only fires on UserPromptSubmit, and only if the session is
+        not yet bound. UserPromptSubmit is the one event that proves the
+        user is currently focused on the claude terminal — there is no way
+        to submit a prompt to claude from another window.
+        """
         self.store.apply_event(evt)
-        if is_new and self.store.get(evt.session_id) is not None:
-            self.binder.try_bind(evt.session_id)
+        if evt.event == "UserPromptSubmit":
+            session = self.store.get(evt.session_id)
+            if session is not None and session.bound_window_id is None:
+                self.binder.try_bind(evt.session_id)
 
     def run(self) -> None:
         self.x11.subscribe_root_substructure()
@@ -102,8 +109,6 @@ class Daemon:
             # binder.unbind_window calls store.set_bound_window(None) which fires
             # on_change which the overlay handles via _sync_one -> _destroy.
             self.binder.unbind_window(wid)
-        elif et == X.VisibilityNotify:
-            self.overlay.raise_all()
 
 
 def default_events_dir() -> Path:
