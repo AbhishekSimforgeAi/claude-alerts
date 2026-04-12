@@ -1,0 +1,14 @@
+[Unit]
+Description=claude-alerts: visual status borders for Claude Code agents
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claude-alerts
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
