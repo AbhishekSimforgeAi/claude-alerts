@@ -23,12 +23,13 @@ def test_user_prompt_submit_sets_working():
     assert store.get("s1").status == Status.WORKING
 
 
-def test_pre_tool_use_sets_waiting():
-    """PreToolUse means Claude is asking for permission — the user needs to act."""
+def test_pre_tool_use_keeps_working():
+    """PreToolUse fires before any tool call — Claude is still working."""
     store = SessionStore()
     store.apply_event(evt("SessionStart"))
+    store.apply_event(evt("UserPromptSubmit", t=1.5))
     store.apply_event(evt("PreToolUse", t=2.0))
-    assert store.get("s1").status == Status.WAITING
+    assert store.get("s1").status == Status.WORKING
 
 
 def test_post_tool_use_keeps_working():

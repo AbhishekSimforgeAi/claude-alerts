@@ -20,7 +20,7 @@ class Status(enum.Enum):
 _EVENT_TO_STATUS = {
     "SessionStart": Status.WAITING,
     "UserPromptSubmit": Status.WORKING,
-    "PreToolUse": Status.WAITING,
+    "PreToolUse": Status.WORKING,
     "PostToolUse": Status.WORKING,
     "Stop": Status.WAITING,
     "Notification": Status.WAITING,
