@@ -42,3 +42,35 @@ def test_hook_script_atomic_write(tmp_path):
         input='{"session_id":"x","cwd":"/y"}', text=True, env=env, check=True,
     )
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required by the hook script")
+def test_hook_script_includes_tool_name_when_present(tmp_path):
+    env = os.environ.copy()
+    env["CLAUDE_ALERTS_EVENTS_DIR"] = str(tmp_path)
+    payload = json.dumps({
+        "session_id": "abc", "cwd": "/p", "tool_name": "Monitor",
+    })
+    subprocess.run(
+        ["bash", str(HOOK_SCRIPT), "PostToolUse"],
+        input=payload, text=True, env=env, check=True,
+    )
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+    data = json.loads(files[0].read_text())
+    assert data["tool_name"] == "Monitor"
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required by the hook script")
+def test_hook_script_omits_tool_name_when_absent(tmp_path):
+    env = os.environ.copy()
+    env["CLAUDE_ALERTS_EVENTS_DIR"] = str(tmp_path)
+    payload = json.dumps({"session_id": "abc", "cwd": "/p"})
+    subprocess.run(
+        ["bash", str(HOOK_SCRIPT), "Stop"],
+        input=payload, text=True, env=env, check=True,
+    )
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+    data = json.loads(files[0].read_text())
+    assert "tool_name" not in data

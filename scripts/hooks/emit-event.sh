@@ -12,6 +12,7 @@ mkdir -p "$EVENTS_DIR"
 PAYLOAD="$(cat || true)"
 SESSION_ID="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty')"
 CWD="$(printf '%s' "$PAYLOAD" | jq -r '.cwd // empty')"
+TOOL_NAME="$(printf '%s' "$PAYLOAD" | jq -r '.tool_name // empty')"
 [ -z "$SESSION_ID" ] && SESSION_ID="unknown"
 [ -z "$CWD" ] && CWD="$(pwd)"
 
@@ -24,9 +25,11 @@ jq -cn \
     --arg event "$EVENT" \
     --arg session_id "$SESSION_ID" \
     --arg cwd "$CWD" \
+    --arg tool_name "$TOOL_NAME" \
     --argjson claude_pid "$$" \
     --argjson timestamp "$TS" \
-    '{event:$event, session_id:$session_id, cwd:$cwd, claude_pid:$claude_pid, timestamp:$timestamp}' \
+    '{event:$event, session_id:$session_id, cwd:$cwd, claude_pid:$claude_pid, timestamp:$timestamp}
+     + (if $tool_name == "" then {} else {tool_name:$tool_name} end)' \
     > "$TMP"
 mv "$TMP" "$FINAL"
 exit 0
