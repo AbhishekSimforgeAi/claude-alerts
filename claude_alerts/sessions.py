@@ -26,6 +26,17 @@ _EVENT_TO_STATUS = {
     "Notification": Status.WAITING,
 }
 
+# Tools whose successful invocation means Claude has armed an autonomous
+# wake-up: when this turn ends, something else will resume Claude without
+# the user typing. The overlay uses this to keep the border green during
+# the pause between Stop and the wake-up firing.
+BACKGROUND_TASK_TOOLS = frozenset({
+    "Monitor",
+    "CronCreate",
+    "RemoteTrigger",
+    "ScheduleWakeup",
+})
+
 
 @dataclass
 class Session:
@@ -37,6 +48,7 @@ class Session:
     bound_window_id: Optional[int] = None
     client_window_id: Optional[int] = None
     last_event: str = ""
+    background_active: bool = False
 
 
 class SessionStore:
@@ -92,6 +104,19 @@ class SessionStore:
                 changed = True
             session.last_event_at = evt.timestamp
             session.last_event = evt.event
+
+        # Background-active lifecycle. Set on successful PostToolUse for
+        # any wake-up creator; cleared on UserPromptSubmit (user took over).
+        # Stop / Notification leave it alone — the overlay layer applies
+        # the Notification-overrides-green rule itself.
+        if evt.event == "PostToolUse" and evt.tool_name in BACKGROUND_TASK_TOOLS:
+            if not session.background_active:
+                session.background_active = True
+                changed = True
+        elif evt.event == "UserPromptSubmit":
+            if session.background_active:
+                session.background_active = False
+                changed = True
 
         if changed:
             self._notify(evt.session_id)

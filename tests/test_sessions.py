@@ -198,3 +198,103 @@ def test_apply_event_stamps_last_event():
     assert store.get("s1").last_event == "Stop"
     store.apply_event(evt("Notification", t=5.0))
     assert store.get("s1").last_event == "Notification"
+
+
+# ---------------------------------------------------------------------------
+# background_active lifecycle tests
+# ---------------------------------------------------------------------------
+
+def _post(tool_name, t=2.0, session_id="s1"):
+    return ClaudeEvent(
+        event="PostToolUse",
+        session_id=session_id,
+        cwd="/p",
+        claude_pid=1,
+        timestamp=t,
+        tool_name=tool_name,
+    )
+
+
+def test_background_active_defaults_false():
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    assert store.get("s1").background_active is False
+
+
+def test_post_tool_use_monitor_sets_background_active():
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("Monitor", t=2.0))
+    assert store.get("s1").background_active is True
+
+
+def test_post_tool_use_croncreate_sets_background_active():
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("CronCreate", t=2.0))
+    assert store.get("s1").background_active is True
+
+
+def test_post_tool_use_remotetrigger_sets_background_active():
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("RemoteTrigger", t=2.0))
+    assert store.get("s1").background_active is True
+
+
+def test_post_tool_use_schedulewakeup_sets_background_active():
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("ScheduleWakeup", t=2.0))
+    assert store.get("s1").background_active is True
+
+
+def test_post_tool_use_other_tool_does_not_set_background_active():
+    """Read/Edit/Bash etc. must not flip the background flag."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("Read", t=2.0))
+    assert store.get("s1").background_active is False
+
+
+def test_pre_tool_use_does_not_set_background_active():
+    """Only PostToolUse counts — PreToolUse fires for tools that may error out."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    pre = ClaudeEvent(
+        event="PreToolUse", session_id="s1", cwd="/p", claude_pid=1,
+        timestamp=2.0, tool_name="Monitor",
+    )
+    store.apply_event(pre)
+    assert store.get("s1").background_active is False
+
+
+def test_user_prompt_submit_clears_background_active():
+    """User typing a new prompt supersedes any pending wake-up."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("Monitor", t=2.0))
+    assert store.get("s1").background_active is True
+    store.apply_event(evt("UserPromptSubmit", t=3.0))
+    assert store.get("s1").background_active is False
+
+
+def test_stop_does_not_clear_background_active():
+    """Stop is exactly the case where we want to keep the flag — Claude
+    paused and will be resumed by the background mechanism."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("Monitor", t=2.0))
+    store.apply_event(evt("Stop", t=3.0))
+    assert store.get("s1").background_active is True
+
+
+def test_notification_does_not_clear_background_active():
+    """Notification means user attention is needed, but the background
+    task is still alive. The overlay layer applies the override; the
+    flag itself stays set."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("Monitor", t=2.0))
+    store.apply_event(evt("Notification", t=3.0))
+    assert store.get("s1").background_active is True
