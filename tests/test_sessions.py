@@ -182,3 +182,19 @@ def test_one_buggy_listener_does_not_break_others():
     # Apply an event; first listener raises, second should still receive.
     store.apply_event(evt("SessionStart"))
     assert seen == ["s1"]
+
+
+def test_apply_event_stamps_last_event():
+    """Session.last_event records the name of the most recently applied event,
+    so the overlay can distinguish Stop-WAITING from Notification-WAITING."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    assert store.get("s1").last_event == "SessionStart"
+    store.apply_event(evt("UserPromptSubmit", t=2.0))
+    assert store.get("s1").last_event == "UserPromptSubmit"
+    store.apply_event(evt("PreToolUse", t=3.0))
+    assert store.get("s1").last_event == "PreToolUse"
+    store.apply_event(evt("Stop", t=4.0))
+    assert store.get("s1").last_event == "Stop"
+    store.apply_event(evt("Notification", t=5.0))
+    assert store.get("s1").last_event == "Notification"

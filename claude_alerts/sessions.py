@@ -36,6 +36,7 @@ class Session:
     last_event_at: float
     bound_window_id: Optional[int] = None
     client_window_id: Optional[int] = None
+    last_event: str = ""
 
 
 class SessionStore:
@@ -81,6 +82,7 @@ class SessionStore:
                 claude_pid=evt.claude_pid,
                 status=new_status,
                 last_event_at=evt.timestamp,
+                last_event=evt.event,
             )
             self._sessions[evt.session_id] = session
             changed = True
@@ -89,6 +91,7 @@ class SessionStore:
                 session.status = new_status
                 changed = True
             session.last_event_at = evt.timestamp
+            session.last_event = evt.event
 
         if changed:
             self._notify(evt.session_id)
