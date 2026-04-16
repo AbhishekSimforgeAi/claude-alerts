@@ -122,10 +122,19 @@ class SessionStore:
             self._notify(evt.session_id)
 
     def evict_idle(self, now: float, max_age_s: float) -> list[str]:
-        """Remove sessions whose last event is older than max_age_s. Returns evicted ids."""
+        """Remove unbound sessions whose last event is older than max_age_s.
+
+        Bound sessions are NEVER evicted on idle: their overlay is tied to
+        a live X11 window, and that window's destruction is signalled by
+        DestroyNotify (handled by the binder), not by hook silence. A long
+        pause between turns must not destroy the border.
+
+        Returns evicted ids.
+        """
         evicted = [
             sid for sid, s in self._sessions.items()
-            if now - s.last_event_at > max_age_s
+            if s.bound_window_id is None
+            and now - s.last_event_at > max_age_s
         ]
         for sid in evicted:
             del self._sessions[sid]

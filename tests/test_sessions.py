@@ -298,3 +298,26 @@ def test_notification_does_not_clear_background_active():
     store.apply_event(_post("Monitor", t=2.0))
     store.apply_event(evt("Notification", t=3.0))
     assert store.get("s1").background_active is True
+
+
+def test_evict_idle_skips_bound_sessions():
+    """A bound session has an overlay tied to a real X11 window; the
+    window is the source of truth for liveness, not hook silence."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart", t=100.0))
+    store.set_bound_window("s1", 0xABCD)
+    # Far past the idle threshold.
+    evicted = store.evict_idle(now=1000.0, max_age_s=300.0)
+    assert evicted == []
+    assert store.get("s1") is not None
+    assert store.get("s1").bound_window_id == 0xABCD
+
+
+def test_evict_idle_still_evicts_unbound_sessions():
+    """Regression guard for the existing unbound-eviction behaviour."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart", t=100.0))
+    # No set_bound_window → still unbound.
+    evicted = store.evict_idle(now=1000.0, max_age_s=300.0)
+    assert evicted == ["s1"]
+    assert store.get("s1") is None
