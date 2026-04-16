@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 VALID_EVENTS = frozenset({
     "SessionStart",
@@ -29,6 +30,7 @@ class ClaudeEvent:
     cwd: str
     claude_pid: int
     timestamp: float
+    tool_name: Optional[str] = None
 
 
 def parse_event_file(path: Path) -> ClaudeEvent:
@@ -71,6 +73,12 @@ def parse_event_file(path: Path) -> ClaudeEvent:
         )
     ts = float(ts)  # safe — already validated as numeric
 
+    tool_name = raw.get("tool_name")
+    if tool_name is not None and not isinstance(tool_name, str):
+        raise EventParseError(
+            f"field 'tool_name' must be str or absent, got {type(tool_name).__name__}"
+        )
+
     if raw["event"] not in VALID_EVENTS:
         raise EventParseError(f"unknown event: {raw['event']}")
 
@@ -80,4 +88,5 @@ def parse_event_file(path: Path) -> ClaudeEvent:
         cwd=raw["cwd"],
         claude_pid=pid,
         timestamp=ts,
+        tool_name=tool_name,
     )

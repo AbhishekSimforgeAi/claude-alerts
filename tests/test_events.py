@@ -104,3 +104,50 @@ def test_rejects_int_session_id(tmp_path):
     })
     with pytest.raises(EventParseError, match="session_id"):
         parse_event_file(p)
+
+
+def test_parses_tool_name_when_present(tmp_path):
+    p = write_event(
+        tmp_path,
+        {
+            "event": "PostToolUse",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+            "tool_name": "Monitor",
+        },
+    )
+    evt = parse_event_file(p)
+    assert evt.tool_name == "Monitor"
+
+
+def test_tool_name_defaults_to_none_when_absent(tmp_path):
+    p = write_event(
+        tmp_path,
+        {
+            "event": "Stop",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+        },
+    )
+    evt = parse_event_file(p)
+    assert evt.tool_name is None
+
+
+def test_rejects_non_string_tool_name(tmp_path):
+    p = write_event(
+        tmp_path,
+        {
+            "event": "PostToolUse",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+            "tool_name": 42,
+        },
+    )
+    with pytest.raises(EventParseError, match="tool_name"):
+        parse_event_file(p)
