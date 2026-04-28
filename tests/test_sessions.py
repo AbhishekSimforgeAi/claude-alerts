@@ -56,6 +56,30 @@ def test_notification_sets_waiting():
     assert store.get("s1").status == Status.WAITING
 
 
+def test_permission_request_sets_waiting():
+    """PermissionRequest fires for sandbox prompts (e.g. network access).
+    The user must act before Claude can continue, so status is WAITING."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(evt("PreToolUse", t=2.0))
+    store.apply_event(evt("PermissionRequest", t=3.0))
+    s = store.get("s1")
+    assert s.status == Status.WAITING
+    assert s.last_event == "PermissionRequest"
+
+
+def test_elicitation_sets_waiting():
+    """Elicitation fires when an MCP server asks for user input mid-tool-call.
+    The user must act before the tool can continue, so status is WAITING."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(evt("PreToolUse", t=2.0))
+    store.apply_event(evt("Elicitation", t=3.0))
+    s = store.get("s1")
+    assert s.status == Status.WAITING
+    assert s.last_event == "Elicitation"
+
+
 def test_session_end_removes_session():
     store = SessionStore()
     store.apply_event(evt("SessionStart"))
@@ -297,6 +321,27 @@ def test_notification_does_not_clear_background_active():
     store.apply_event(evt("SessionStart"))
     store.apply_event(_post("Monitor", t=2.0))
     store.apply_event(evt("Notification", t=3.0))
+    assert store.get("s1").background_active is True
+
+
+def test_permission_request_does_not_clear_background_active():
+    """Same as Notification: PermissionRequest means the user must act,
+    but the background task is still alive. The flag stays set; the
+    overlay layer applies the override."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("Monitor", t=2.0))
+    store.apply_event(evt("PermissionRequest", t=3.0))
+    assert store.get("s1").background_active is True
+
+
+def test_elicitation_does_not_clear_background_active():
+    """Elicitation also leaves background_active alone — the overlay layer
+    applies the user-action-overrides-green rule."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart"))
+    store.apply_event(_post("Monitor", t=2.0))
+    store.apply_event(evt("Elicitation", t=3.0))
     assert store.get("s1").background_active is True
 
 

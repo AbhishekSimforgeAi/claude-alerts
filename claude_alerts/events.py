@@ -13,6 +13,8 @@ VALID_EVENTS = frozenset({
     "PostToolUse",
     "Stop",
     "Notification",
+    "PermissionRequest",
+    "Elicitation",
     "SessionEnd",
 })
 

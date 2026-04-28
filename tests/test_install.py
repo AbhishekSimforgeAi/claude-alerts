@@ -16,7 +16,7 @@ spec.loader.exec_module(install_hooks)
 HOOK_PATH = "/abs/path/to/emit-event.sh"
 HOOK_EVENTS = (
     "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-    "Stop", "Notification", "SessionEnd",
+    "Stop", "Notification", "PermissionRequest", "Elicitation", "SessionEnd",
 )
 
 

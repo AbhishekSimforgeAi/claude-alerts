@@ -24,7 +24,20 @@ _EVENT_TO_STATUS = {
     "PostToolUse": Status.WORKING,
     "Stop": Status.WAITING,
     "Notification": Status.WAITING,
+    "PermissionRequest": Status.WAITING,
+    "Elicitation": Status.WAITING,
 }
+
+# Events whose arrival means the user must take action before Claude can
+# continue — the overlay paints red even when a background task is alive.
+# Notification covers tool-permission and idle prompts; PermissionRequest
+# covers sandbox prompts (e.g. "Network request outside of sandbox");
+# Elicitation covers MCP servers asking for user input mid-tool-call.
+USER_ACTION_EVENTS = frozenset({
+    "Notification",
+    "PermissionRequest",
+    "Elicitation",
+})
 
 # Tools whose successful invocation means Claude has armed an autonomous
 # wake-up: when this turn ends, something else will resume Claude without
@@ -107,8 +120,8 @@ class SessionStore:
 
         # Background-active lifecycle. Set on successful PostToolUse for
         # any wake-up creator; cleared on UserPromptSubmit (user took over).
-        # Stop / Notification leave it alone — the overlay layer applies
-        # the Notification-overrides-green rule itself.
+        # Stop / Notification / PermissionRequest leave it alone — the
+        # overlay layer applies the user-action-overrides-green rule itself.
         if evt.event == "PostToolUse" and evt.tool_name in BACKGROUND_TASK_TOOLS:
             if not session.background_active:
                 session.background_active = True

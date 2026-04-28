@@ -7,7 +7,12 @@ from Xlib import X, Xatom
 from Xlib.ext import shape
 
 from claude_alerts.config import Config
-from claude_alerts.sessions import Session, SessionStore, Status
+from claude_alerts.sessions import (
+    Session,
+    SessionStore,
+    Status,
+    USER_ACTION_EVENTS,
+)
 from claude_alerts.x11 import Geometry, X11Client
 
 log = logging.getLogger(__name__)
@@ -129,14 +134,14 @@ class OverlayManager:
 
         Green when Claude is actively WORKING, or when the session has an
         autonomous wake-up alive (background_active) and the most recent
-        event was NOT a Notification. Notifications always paint red,
-        because they mean the user must act, even if a background task is
-        also alive.
+        event was not a user-action event. User-action events (Notification,
+        PermissionRequest) always paint red, because they mean the user
+        must act, even if a background task is also alive.
         """
         if session.status == Status.WORKING:
             return self._working_pixel
         # status == WAITING from here.
-        if session.background_active and session.last_event != "Notification":
+        if session.background_active and session.last_event not in USER_ACTION_EVENTS:
             return self._working_pixel
         return self._waiting_pixel
 

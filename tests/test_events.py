@@ -39,6 +39,38 @@ def test_rejects_unknown_event(tmp_path):
         parse_event_file(p)
 
 
+def test_accepts_permission_request_event(tmp_path):
+    """Sandbox prompts emit PermissionRequest; the parser must accept it."""
+    p = write_event(
+        tmp_path,
+        {
+            "event": "PermissionRequest",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+        },
+    )
+    evt = parse_event_file(p)
+    assert evt.event == "PermissionRequest"
+
+
+def test_accepts_elicitation_event(tmp_path):
+    """MCP elicitation dialogs emit Elicitation; the parser must accept it."""
+    p = write_event(
+        tmp_path,
+        {
+            "event": "Elicitation",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+        },
+    )
+    evt = parse_event_file(p)
+    assert evt.event == "Elicitation"
+
+
 def test_rejects_missing_field(tmp_path):
     p = write_event(tmp_path, {"event": "Stop", "session_id": "x"})
     with pytest.raises(EventParseError, match="missing field"):

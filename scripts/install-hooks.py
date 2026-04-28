@@ -16,6 +16,8 @@ HOOK_EVENTS = (
     "PostToolUse",
     "Stop",
     "Notification",
+    "PermissionRequest",
+    "Elicitation",
     "SessionEnd",
 )
 
