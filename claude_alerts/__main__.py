@@ -49,6 +49,11 @@ def main() -> int:
         default=None,
         help="Override path to the sessions.json snapshot.",
     )
+    p.add_argument(
+        "--no-dashboard",
+        action="store_true",
+        help="Don't render the per-session usage dashboard, even on a TTY.",
+    )
     args = p.parse_args()
 
     config_path = args.config or default_config_path()
@@ -64,7 +69,10 @@ def main() -> int:
 
     try:
         daemon = Daemon(
-            events_dir=events_dir, config=cfg, persistence_path=persistence_path,
+            events_dir=events_dir,
+            config=cfg,
+            persistence_path=persistence_path,
+            dashboard_enabled=not args.no_dashboard,
         )
     except Exception as e:
         msg = f"claude-alerts: cannot start daemon: {e}"

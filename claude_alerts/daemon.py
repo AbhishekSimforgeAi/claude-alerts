@@ -13,6 +13,7 @@ from Xlib import X
 
 from claude_alerts.binder import Binder
 from claude_alerts.config import Config
+from claude_alerts.dashboard import Dashboard
 from claude_alerts.events import ClaudeEvent
 from claude_alerts.ingester import EventIngester
 from claude_alerts.overlay import OverlayManager
@@ -32,6 +33,7 @@ class Daemon:
         events_dir: Path,
         config: Config,
         persistence_path: Path | None = None,
+        dashboard_enabled: bool = True,
     ) -> None:
         self.events_dir = events_dir
         self.config = config
@@ -42,6 +44,9 @@ class Daemon:
         self.persister = (
             BindingPersister(persistence_path) if persistence_path is not None else None
         )
+        self.dashboard = Dashboard(self.store) if dashboard_enabled else None
+        if self.dashboard is not None and self.dashboard.enabled:
+            self.store.on_change(self.dashboard.on_session_changed)
         # Marshal ingester events to the main thread via a thread-safe queue.
         # python-xlib is NOT thread-safe — all X11 calls must run on the main thread.
         self._event_queue: "queue.SimpleQueue[ClaudeEvent]" = queue.SimpleQueue()
@@ -130,11 +135,17 @@ class Daemon:
                 if now - self._last_sweep >= IDLE_SWEEP_INTERVAL_S:
                     self.store.evict_idle(now=time.time(), max_age_s=IDLE_MAX_AGE_S)
                     self._last_sweep = now
+
+                # Dashboard tick (cheap when nothing has changed; no-op when not a TTY).
+                if self.dashboard is not None:
+                    self.dashboard.tick()
         finally:
             log.info("daemon stopping")
             self.ingester.stop()
             if self.persister is not None:
                 self.persister.stop()
+            if self.dashboard is not None:
+                self.dashboard.shutdown()
 
     def stop(self) -> None:
         self._stop.set()
