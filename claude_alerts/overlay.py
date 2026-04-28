@@ -187,6 +187,16 @@ class OverlayManager:
     def has_overlay(self, session_id: str) -> bool:
         return session_id in self._overlays
 
+    def sync_all(self) -> None:
+        """Force a paint pass over every session in the store.
+
+        Used at daemon startup after restoring persisted bindings, so the
+        borders appear without waiting for the next hook event to fire
+        on_session_changed.
+        """
+        for session in self.store.all():
+            self._sync_one(session)
+
     def _sync_one(self, session: Session) -> None:
         if session.bound_window_id is None:
             self._destroy(session.session_id)

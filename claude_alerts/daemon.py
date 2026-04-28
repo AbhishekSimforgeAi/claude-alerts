@@ -16,6 +16,7 @@ from claude_alerts.config import Config
 from claude_alerts.events import ClaudeEvent
 from claude_alerts.ingester import EventIngester
 from claude_alerts.overlay import OverlayManager
+from claude_alerts.persistence import BindingPersister
 from claude_alerts.sessions import SessionStore
 from claude_alerts.x11 import Geometry, X11Client
 
@@ -26,13 +27,21 @@ IDLE_MAX_AGE_S = 300.0
 
 
 class Daemon:
-    def __init__(self, events_dir: Path, config: Config) -> None:
+    def __init__(
+        self,
+        events_dir: Path,
+        config: Config,
+        persistence_path: Path | None = None,
+    ) -> None:
         self.events_dir = events_dir
         self.config = config
         self.store = SessionStore()
         self.x11 = X11Client()
         self.binder = Binder(self.store, self.x11)
         self.overlay = OverlayManager(self.x11, self.store, self.config)
+        self.persister = (
+            BindingPersister(persistence_path) if persistence_path is not None else None
+        )
         # Marshal ingester events to the main thread via a thread-safe queue.
         # python-xlib is NOT thread-safe — all X11 calls must run on the main thread.
         self._event_queue: "queue.SimpleQueue[ClaudeEvent]" = queue.SimpleQueue()
@@ -57,6 +66,37 @@ class Daemon:
 
     def run(self) -> None:
         self.x11.subscribe_root_substructure()
+
+        # Restore persisted bindings before subscribing to events, so the
+        # first ingester event sees a fully reconstructed store. Drop entries
+        # whose bound window no longer exists — the X server may have been
+        # restarted, the terminal may have been closed while we were down.
+        if self.persister is not None:
+            for s in self.persister.load():
+                target = s.client_window_id or s.bound_window_id
+                if target is None:
+                    continue
+                try:
+                    geo = self.x11.get_visible_geometry(target)
+                except Exception as e:
+                    log.debug(
+                        "session %s: skipping restore (geometry query failed: %s)",
+                        s.session_id, e,
+                    )
+                    continue
+                if geo is None:
+                    log.info(
+                        "session %s: skipping restore (window %#x is gone)",
+                        s.session_id, target,
+                    )
+                    continue
+                self.store.restore(s)
+            # Subscribe AFTER restore so we don't immediately rewrite the file
+            # we just loaded.
+            self.store.on_change(lambda _sid: self.persister.save(self.store.all()))
+            # Paint borders for everything we restored.
+            self.overlay.sync_all()
+
         self._ingester_thread = threading.Thread(target=self.ingester.run, daemon=True)
         self._ingester_thread.start()
 
@@ -93,6 +133,8 @@ class Daemon:
         finally:
             log.info("daemon stopping")
             self.ingester.stop()
+            if self.persister is not None:
+                self.persister.stop()
 
     def stop(self) -> None:
         self._stop.set()
@@ -124,3 +166,8 @@ def default_config_path() -> Path:
 def default_log_path() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
     return Path(base) / "claude-alerts" / "daemon.log"
+
+
+def default_persistence_path() -> Path:
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "claude-alerts" / "sessions.json"

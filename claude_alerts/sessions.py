@@ -87,6 +87,20 @@ class SessionStore:
     def all(self) -> list[Session]:
         return list(self._sessions.values())
 
+    def restore(self, session: Session) -> None:
+        """Insert a fully-formed Session without going through apply_event.
+
+        Used at daemon startup to reconstruct state from the persistence file.
+        Bypasses the state machine and the background_active lifecycle — the
+        persisted record is treated as the authoritative post-event state.
+
+        Fires on_change listeners so the overlay manager can paint the border;
+        the persister is wired AFTER restore so the load doesn't immediately
+        rewrite the file with what we just read.
+        """
+        self._sessions[session.session_id] = session
+        self._notify(session.session_id)
+
     def apply_event(self, evt: ClaudeEvent) -> None:
         if evt.event == "SessionEnd":
             if evt.session_id in self._sessions:

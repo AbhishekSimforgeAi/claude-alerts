@@ -366,3 +366,51 @@ def test_evict_idle_still_evicts_unbound_sessions():
     evicted = store.evict_idle(now=1000.0, max_age_s=300.0)
     assert evicted == ["s1"]
     assert store.get("s1") is None
+
+
+# ---------------------------------------------------------------------------
+# restore() — used by the persistence layer to reconstruct state at startup
+# ---------------------------------------------------------------------------
+
+
+def test_restore_inserts_session_and_notifies():
+    store = SessionStore()
+    seen = []
+    store.on_change(lambda sid: seen.append(sid))
+    s = Session(
+        session_id="abc",
+        cwd="/p",
+        claude_pid=1,
+        status=Status.WAITING,
+        last_event_at=10.0,
+        bound_window_id=0xFF,
+        client_window_id=0xFF,
+        last_event="Stop",
+        background_active=False,
+    )
+    store.restore(s)
+    got = store.get("abc")
+    assert got is s
+    assert seen == ["abc"]
+
+
+def test_restore_bypasses_state_machine():
+    """restore() is for reconstructing post-event state; it must not run
+    apply_event-style transitions like background_active clearing."""
+    store = SessionStore()
+    s = Session(
+        session_id="abc",
+        cwd="/p",
+        claude_pid=1,
+        status=Status.WAITING,
+        last_event_at=10.0,
+        bound_window_id=0xFF,
+        client_window_id=0xFF,
+        last_event="Stop",
+        background_active=True,  # would be cleared by UserPromptSubmit, not Stop
+    )
+    store.restore(s)
+    got = store.get("abc")
+    assert got.background_active is True
+    assert got.last_event == "Stop"
+    assert got.status == Status.WAITING
