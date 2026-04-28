@@ -33,7 +33,11 @@ def _hook_entry(hook_path: str, event: str) -> dict:
     }
 
 
-def merge_hooks_into(settings_path: Path, hook_path: str) -> None:
+def merge_hooks_into(
+    settings_path: Path,
+    hook_path: str,
+    statusline_path: Optional[str] = None,
+) -> None:
     settings_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Snapshot existing mode so we can restore it after rewriting (settings.json may be 600).
@@ -85,6 +89,23 @@ def merge_hooks_into(settings_path: Path, hook_path: str) -> None:
         if not already:
             bucket.append(_hook_entry(hook_path, event))
 
+    # Optionally install the statusLine helper. Only set it if the user
+    # has none — never clobber an existing custom command.
+    if statusline_path is not None:
+        existing_sl = data.get("statusLine")
+        target_sl = {"type": "command", "command": statusline_path}
+        if not isinstance(existing_sl, dict) or not existing_sl.get("command"):
+            data["statusLine"] = target_sl
+        elif existing_sl.get("command") == statusline_path:
+            pass  # idempotent
+        else:
+            print(
+                f"warning: statusLine.command already set to "
+                f"{existing_sl.get('command')!r}; not overwriting. "
+                f"To capture rate-limit data, chain to "
+                f"{statusline_path} via CLAUDE_ALERTS_WRAPPED_STATUSLINE.",
+            )
+
     settings_path.write_text(json.dumps(data, indent=2) + "\n")
 
     # Restore the previous mode if we had one.
@@ -107,9 +128,29 @@ def main() -> None:
         default=str(Path(__file__).resolve().parent / "hooks" / "emit-event.sh"),
         help="Absolute path to emit-event.sh",
     )
+    p.add_argument(
+        "--statusline-path",
+        default=str(Path(__file__).resolve().parent / "hooks" / "statusline.sh"),
+        help="Absolute path to statusline.sh; pass empty string to skip statusLine install.",
+    )
+    p.add_argument(
+        "--no-statusline",
+        action="store_true",
+        help="Skip installing the statusLine helper.",
+    )
     args = p.parse_args()
-    merge_hooks_into(Path(args.settings), os.path.abspath(args.hook_path))
+    statusline = (
+        None if args.no_statusline or not args.statusline_path
+        else os.path.abspath(args.statusline_path)
+    )
+    merge_hooks_into(
+        Path(args.settings),
+        os.path.abspath(args.hook_path),
+        statusline_path=statusline,
+    )
     print(f"Installed claude-alerts hooks into {args.settings}")
+    if statusline is not None:
+        print(f"statusLine helper: {statusline}")
 
 
 if __name__ == "__main__":

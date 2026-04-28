@@ -3,41 +3,29 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from pathlib import Path
 
 from claude_alerts.dashboard import (
     Dashboard,
-    _format_cost,
-    _format_tokens,
+    _bar,
+    _format_age,
+    _format_resets_in,
     _short_cwd,
     _short_id,
-    _short_model,
 )
 from claude_alerts.events import ClaudeEvent
 from claude_alerts.sessions import SessionStore
 
 
-def test_format_tokens_compresses():
-    assert _format_tokens(0) == "0"
-    assert _format_tokens(950) == "950"
-    assert _format_tokens(1500) == "1.5k"
-    assert _format_tokens(2_500_000) == "2.5M"
-
-
-def test_format_cost_picks_scale():
-    assert _format_cost(0.001) == "$0.001"
-    assert _format_cost(0.42) == "$0.420"
-    assert _format_cost(2.5) == "$2.50"
-    assert _format_cost(1234) == "$1234"
+def _write_sidecar(tmp_path: Path, payload: dict) -> Path:
+    p = tmp_path / "rate_limits.json"
+    p.write_text(json.dumps(payload))
+    return p
 
 
 def test_short_id_takes_uuid_prefix():
     assert _short_id("5756986d-da80-4494-af8d-35dccc263499") == "5756986d"
-
-
-def test_short_model_drops_claude_prefix_and_datestamp():
-    assert _short_model("claude-opus-4-7") == "opus-4-7"
-    assert _short_model("claude-haiku-4-5-20251001") == "haiku-4-5"
 
 
 def test_short_cwd_substitutes_home(monkeypatch, tmp_path):
@@ -53,90 +41,110 @@ def test_short_cwd_truncates_left():
     assert out.endswith("project")
 
 
-def test_dashboard_is_disabled_when_stdout_is_not_a_tty():
+def test_bar_renders_correct_fill():
+    assert _bar(0, 10) == "░░░░░░░░░░"
+    assert _bar(100, 10) == "██████████"
+    assert _bar(50, 10) == "█████░░░░░"
+    # Out-of-range values clamp.
+    assert _bar(-5, 10) == "░░░░░░░░░░"
+    assert _bar(150, 10) == "██████████"
+
+
+def test_format_resets_in():
+    now = 1_000_000
+    assert _format_resets_in(now, now - 10) == "any moment"
+    assert _format_resets_in(now, now + 30) == "30s"
+    assert _format_resets_in(now, now + 600) == "10m"
+    assert _format_resets_in(now, now + 7200) == "2h 0m"
+    assert _format_resets_in(now, now + 90000) == "1d 1h"
+
+
+def test_format_age():
+    now = 1_000_000
+    assert _format_age(now, now - 5) == "5s ago"
+    assert _format_age(now, now - 90) == "1m ago"
+    assert _format_age(now, now - 4000) == "1h ago"
+
+
+def test_dashboard_disabled_when_stdout_is_not_a_tty():
     store = SessionStore()
     out = io.StringIO()
     d = Dashboard(store, out=out)
     assert d.enabled is False
-    d.tick()  # should be a no-op
+    d.tick()
     assert out.getvalue() == ""
 
 
-def test_dashboard_render_with_no_sessions(tmp_path):
+def test_dashboard_renders_message_when_no_sidecar(tmp_path):
     store = SessionStore()
-    d = Dashboard(store, projects_root=tmp_path, force_render=True)
+    d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
     text = d.render_string()
     assert "claude-alerts daemon" in text
-    assert "0 active" in text
+    assert "no statusLine data yet" in text
+    assert "no active sessions" in text
+
+
+def test_dashboard_renders_limits_block(tmp_path):
+    sidecar = _write_sidecar(tmp_path, {
+        "saved_at": time.time(),
+        "rate_limits": {
+            "five_hour":        {"used_percentage": 42.5, "resets_at": int(time.time()) + 7200},
+            "seven_day":        {"used_percentage": 18.3, "resets_at": int(time.time()) + 86400},
+            "seven_day_opus":   {"used_percentage": 56.0, "resets_at": int(time.time()) + 86400},
+        },
+    })
+    store = SessionStore()
+    d = Dashboard(store, sidecar_path=sidecar, force_render=True)
+    d.tick()  # populates the cache
+    text = d.render_string()
+    assert "5-hour" in text
+    assert "weekly" in text
+    assert "Opus" in text
+    # 42.5% should appear with one decimal.
+    assert "42.5%" in text
 
 
 def test_dashboard_lists_active_session(tmp_path):
     store = SessionStore()
     store.apply_event(ClaudeEvent(
-        event="UserPromptSubmit", session_id="abc12345-xxxx", cwd=str(tmp_path),
-        claude_pid=1, timestamp=1.0,
-    ))
-    d = Dashboard(store, projects_root=tmp_path, force_render=True)
-    text = d.render_string()
-    assert "abc12345" in text
-    assert "1 active" in text
-
-
-def test_dashboard_includes_jsonl_token_counts(tmp_path):
-    """When the JSONL exists for a session, its token counts should
-    appear in the row."""
-    cwd = "/x/y"
-    sid = "deadbeef-aaaa-bbbb-cccc-dddddddddddd"
-    project_dir = tmp_path / cwd.replace("/", "-")
-    project_dir.mkdir(parents=True)
-    (project_dir / f"{sid}.jsonl").write_text(json.dumps({
-        "type": "assistant",
-        "timestamp": "2026-04-28T10:00:00.000Z",
-        "message": {
-            "model": "claude-opus-4-7",
-            "usage": {
-                "input_tokens": 1234,
-                "cache_read_input_tokens": 0,
-                "cache_creation_input_tokens": 0,
-                "output_tokens": 567,
-            },
-        },
-    }) + "\n")
-
-    store = SessionStore()
-    d = Dashboard(store, projects_root=tmp_path, force_render=True)
-    store.on_change(d.on_session_changed)
-    store.apply_event(ClaudeEvent(
-        event="UserPromptSubmit", session_id=sid, cwd=cwd,
-        claude_pid=1, timestamp=1.0,
-    ))
-    text = d.render_string()
-    assert "deadbeef" in text
-    assert "1.2k" in text  # 1234 input tokens compressed
-    assert "opus-4-7" in text
-
-
-def test_dashboard_drops_columns_at_narrow_width(tmp_path):
-    store = SessionStore()
-    store.apply_event(ClaudeEvent(
         event="UserPromptSubmit", session_id="abc12345-x", cwd=str(tmp_path),
         claude_pid=1, timestamp=1.0,
     ))
-    d = Dashboard(store, projects_root=tmp_path, force_render=True)
-    wide = d._build_lines(width=130, with_ansi=False)
-    narrow = d._build_lines(width=70, with_ansi=False)
-    # At narrow width the row should be shorter (fewer columns rendered).
-    wide_row = next(line for line in wide.splitlines() if "abc12345" in line)
-    narrow_row = next(line for line in narrow.splitlines() if "abc12345" in line)
-    assert len(wide_row) > len(narrow_row)
+    d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
+    text = d.render_string()
+    assert "abc12345" in text
+    assert "1 session" in text
+    assert "● working" in text
 
 
-def test_dashboard_paint_is_no_op_when_disabled(tmp_path):
+def test_dashboard_marks_data_stale_when_old(tmp_path):
+    very_old = time.time() - 7200  # 2 hours ago, beyond 30-min stale threshold
+    sidecar = _write_sidecar(tmp_path, {
+        "saved_at": very_old,
+        "rate_limits": {
+            "five_hour": {"used_percentage": 50.0, "resets_at": int(time.time()) + 3600},
+        },
+    })
+    store = SessionStore()
+    d = Dashboard(store, sidecar_path=sidecar, force_render=True)
+    d.tick()
+    text = d.render_string()
+    assert "stale" in text
+
+
+def test_dashboard_skips_paint_when_disabled():
     store = SessionStore()
     out = io.StringIO()
-    d = Dashboard(store, projects_root=tmp_path, out=out)
-    # not a TTY
+    d = Dashboard(store, out=out)
     assert not d.enabled
     d.mark_dirty()
     d.tick()
     assert out.getvalue() == ""
+
+
+def test_dashboard_session_changed_marks_dirty(tmp_path):
+    store = SessionStore()
+    d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
+    d._dirty = False
+    d.on_session_changed("anything")
+    assert d._dirty is True
