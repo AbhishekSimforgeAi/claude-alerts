@@ -148,3 +148,30 @@ def test_dashboard_session_changed_marks_dirty(tmp_path):
     d._dirty = False
     d.on_session_changed("anything")
     assert d._dirty is True
+
+
+def test_dashboard_strips_ansi_escapes_from_session_data(tmp_path):
+    """A hostile cwd or session_id containing ANSI escape sequences must
+    not flow through the dashboard onto the user's TTY — terminals could
+    interpret them as cursor moves, title rewrites, or RCE primitives."""
+    store = SessionStore()
+    hostile_cwd = "/tmp/\x1b[31mhostile\x1b[0m"
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit",
+        session_id="abc12\x1b[Hpwn", cwd=hostile_cwd,
+        claude_pid=1, timestamp=1.0,
+    ))
+    d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
+    text = d.render_string()
+    assert "\x1b" not in text
+    assert "\x1b[" not in text
+
+
+def test_dashboard_truncates_lines_to_width(tmp_path):
+    """At narrow widths each line must be clipped, not wrapped — wrapping
+    would corrupt the cursor-home repaint."""
+    store = SessionStore()
+    d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
+    text = d._build_lines(width=20)
+    for line in text.splitlines():
+        assert len(line) <= 20, f"line longer than 20: {line!r}"

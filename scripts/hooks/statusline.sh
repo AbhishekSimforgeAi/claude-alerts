@@ -17,14 +17,16 @@
 # to the absolute path of this file (or run scripts/install-hooks.py
 # --install-statusline).
 
-set -e
+set -euo pipefail
 
 STATE_DIR="${CLAUDE_ALERTS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/claude-alerts}"
-mkdir -p "$STATE_DIR"
+mkdir -p -m 700 "$STATE_DIR"
+chmod 700 "$STATE_DIR" 2>/dev/null || true
 
 PAYLOAD="$(cat || true)"
 
 # Single jq pass to extract everything we need; cheaper than four invocations.
+# `|| true` keeps `set -e` from killing us when jq fails (e.g. malformed JSON).
 JQ_OUT="$(
     printf '%s' "$PAYLOAD" | jq -r '
         [
@@ -35,21 +37,31 @@ JQ_OUT="$(
         ] | @tsv
     ' 2>/dev/null || printf '\t\t\t'
 )"
-IFS=$'\t' read -r RATE_LIMITS MODEL CWD BRANCH <<< "$JQ_OUT"
+IFS=$'\t' read -r RATE_LIMITS MODEL CWD BRANCH <<< "${JQ_OUT:-$'\t\t\t'}"
 
-# Persist rate_limits if the input had any. Atomic write via tmp + mv.
-if [ -n "$RATE_LIMITS" ] && [ "$RATE_LIMITS" != "null" ]; then
+# Persist rate_limits if the input had any. Validate that it's parseable JSON
+# before writing — defends against jq output with malformed `tojson` results.
+if [ -n "${RATE_LIMITS:-}" ] && [ "$RATE_LIMITS" != "null" ] \
+        && printf '%s' "$RATE_LIMITS" | jq -e . >/dev/null 2>&1; then
     TS="$(date +%s.%N)"
     TMP="$STATE_DIR/rate_limits.json.tmp"
     OUT="$STATE_DIR/rate_limits.json"
-    printf '{"saved_at": %s, "rate_limits": %s}\n' "$TS" "$RATE_LIMITS" > "$TMP"
+    # Open with restrictive umask so the sidecar inherits 0600.
+    (umask 077 && printf '{"saved_at": %s, "rate_limits": %s}\n' "$TS" "$RATE_LIMITS" > "$TMP")
     mv "$TMP" "$OUT"
 fi
 
-# Optionally chain to an existing statusLine command.
-if [ -n "${CLAUDE_ALERTS_WRAPPED_STATUSLINE:-}" ]; then
-    printf '%s' "$PAYLOAD" | "$CLAUDE_ALERTS_WRAPPED_STATUSLINE"
-    exit 0
+# Optionally chain to an existing statusLine command. The wrapped command must
+# be an absolute path the user trusts; we refuse anything containing whitespace
+# or shell metacharacters to harden against environment-injection attacks
+# (direnv, malicious .env, etc.).
+WRAP="${CLAUDE_ALERTS_WRAPPED_STATUSLINE:-}"
+if [ -n "$WRAP" ]; then
+    if [[ "$WRAP" =~ ^/[A-Za-z0-9._/-]+$ ]] && [ -x "$WRAP" ]; then
+        printf '%s' "$PAYLOAD" | "$WRAP"
+        exit 0
+    fi
+    printf 'claude-alerts: ignoring CLAUDE_ALERTS_WRAPPED_STATUSLINE %q (must be absolute, executable, no shell metacharacters)\n' "$WRAP" >&2
 fi
 
 # Default minimal status line.

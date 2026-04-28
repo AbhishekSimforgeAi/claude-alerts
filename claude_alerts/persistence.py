@@ -50,7 +50,7 @@ def _dict_to_session(d: dict) -> Optional[Session]:
             background_active=bool(d.get("background_active", False)),
         )
     except (KeyError, TypeError, ValueError) as e:
-        log.debug("persisted session entry rejected: %s (%r)", e, d)
+        log.warning("persisted session entry rejected: %s (%r)", e, d)
         return None
 
 
@@ -147,12 +147,40 @@ class BindingPersister:
             self._last_write = time.monotonic()
 
     def _write_atomic(self, sessions: list[dict]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        """Write sessions.json atomically with fsync for power-loss durability.
+
+        File is created mode 0600 — the snapshot contains pids, cwd paths,
+        and session ids that fingerprint the user's workflow. tmp+rename
+        is atomic w.r.t. concurrent readers, fsync makes it durable across
+        crashes and power loss.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(self.path.parent, 0o700)
+        except OSError:
+            pass
         data = {
             "version": SCHEMA_VERSION,
             "saved_at": time.time(),
             "sessions": sessions,
         }
+        body = json.dumps(data, indent=2) + "\n"
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2) + "\n")
+        # Open with explicit mode so umask doesn't widen permissions.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, body.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(tmp, self.path)
+        # fsync the parent dir so the rename is durable too.
+        try:
+            dir_fd = os.open(self.path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            # Some filesystems (e.g. tmpfs) don't support directory fsync.
+            pass

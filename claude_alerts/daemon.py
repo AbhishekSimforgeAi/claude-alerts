@@ -47,6 +47,11 @@ class Daemon:
         self.dashboard = Dashboard(self.store) if dashboard_enabled else None
         if self.dashboard is not None and self.dashboard.enabled:
             self.store.on_change(self.dashboard.on_session_changed)
+        # Bound the binder's manual-bind queue: drop ids whose session was
+        # removed (SessionEnd or idle eviction). Without this, a long-running
+        # daemon with many short-lived non-terminal sessions would grow the
+        # queue unboundedly.
+        self.store.on_change(self._reap_binder_queue)
         # Marshal ingester events to the main thread via a thread-safe queue.
         # python-xlib is NOT thread-safe — all X11 calls must run on the main thread.
         self._event_queue: "queue.SimpleQueue[ClaudeEvent]" = queue.SimpleQueue()
@@ -54,6 +59,10 @@ class Daemon:
         self._stop = threading.Event()
         self._ingester_thread: threading.Thread | None = None
         self._last_sweep = time.monotonic()
+
+    def _reap_binder_queue(self, session_id: str) -> None:
+        if self.store.get(session_id) is None:
+            self.binder.forget_session(session_id)
 
     def _on_event(self, evt: ClaudeEvent) -> None:
         """Runs on the main thread only — drained from the queue in run().

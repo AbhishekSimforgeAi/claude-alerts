@@ -98,7 +98,21 @@ class Binder:
         log.info("session %s manually bound to frame %#x", session_id, frame_wid)
 
     def pending_manual_binds(self) -> list[str]:
+        # Drop ids whose session has since been removed (SessionEnd, eviction).
+        # Keeps the queue from growing unboundedly across long-running daemons.
+        self._pending = [sid for sid in self._pending if self.store.get(sid) is not None]
         return list(self._pending)
+
+    def forget_session(self, session_id: str) -> None:
+        """Drop a session from the manual-bind queue, if present.
+
+        Called when a session is removed (SessionEnd or idle eviction) so the
+        queue doesn't accumulate dead ids on a long-running daemon.
+        """
+        try:
+            self._pending.remove(session_id)
+        except ValueError:
+            pass
 
     def unbind_window(self, window_id: int) -> None:
         """Called when a bound window has been destroyed."""

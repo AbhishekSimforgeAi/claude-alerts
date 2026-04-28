@@ -74,3 +74,28 @@ def test_hook_script_omits_tool_name_when_absent(tmp_path):
     assert len(files) == 1
     data = json.loads(files[0].read_text())
     assert "tool_name" not in data
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required by the hook script")
+def test_hook_script_sanitizes_session_id_in_filename(tmp_path):
+    """A hostile session_id with path-traversal characters must NOT escape
+    the events directory. The JSON payload still carries the original
+    session_id verbatim — only the filename is sanitized."""
+    env = os.environ.copy()
+    env["CLAUDE_ALERTS_EVENTS_DIR"] = str(tmp_path)
+    payload = json.dumps({"session_id": "../../../etc/evil", "cwd": "/p"})
+    subprocess.run(
+        ["bash", str(HOOK_SCRIPT), "Stop"],
+        input=payload, text=True, env=env, check=True,
+    )
+    # No file escaped the events dir.
+    files = list(tmp_path.glob("**/*.json"))
+    assert len(files) == 1
+    assert files[0].parent == tmp_path  # still in tmp_path, not anywhere else
+    # Filename has no '/' — '..' inside a filename is harmless (still a
+    # single literal directory entry), but '/' would actually traverse.
+    name = files[0].name
+    assert "/" not in name
+    # The JSON body still has the literal string (jq's --arg escaped it safely).
+    data = json.loads(files[0].read_text())
+    assert data["session_id"] == "../../../etc/evil"

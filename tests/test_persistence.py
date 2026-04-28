@@ -152,6 +152,17 @@ def test_load_skips_individual_bad_entries(tmp_path):
     assert [s.session_id for s in loaded] == ["good"]
 
 
+def test_save_writes_file_with_0600_permissions(tmp_path):
+    """sessions.json contains pids/cwds/session-ids and should not be
+    world-readable on a multi-user box."""
+    import stat
+    p = BindingPersister(tmp_path / "sessions.json", throttle_s=0.0)
+    p.save([_make_session()])
+    _settle(p)
+    mode = stat.S_IMODE((tmp_path / "sessions.json").stat().st_mode)
+    assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
 def test_save_uses_atomic_rename(tmp_path):
     """Crash mid-write should leave the previous content intact, never a partial.
     We can't actually crash; we verify the tmp+rename pattern by checking

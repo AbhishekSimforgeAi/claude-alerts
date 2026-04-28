@@ -25,9 +25,9 @@ no curses) so Ctrl-C and shutdown logging stay legible.
 """
 from __future__ import annotations
 
-import datetime
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -46,11 +46,26 @@ from claude_alerts.sessions import Session, SessionStore, Status
 log = logging.getLogger(__name__)
 
 
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _strip_control(s: str) -> str:
+    """Replace ASCII control characters (incl. ESC) with '?'.
+
+    Anything that flows from a hostile or buggy hook payload to the
+    daemon's TTY must be defanged: ESC sequences could rewrite the
+    terminal title, move the cursor, or trigger RCE on vulnerable
+    terminals.
+    """
+    return _CONTROL_CHARS.sub("?", s)
+
+
 def _short_id(session_id: str) -> str:
-    return session_id.split("-", 1)[0]
+    return _strip_control(session_id.split("-", 1)[0])
 
 
 def _short_cwd(cwd: str, max_chars: int = 50) -> str:
+    cwd = _strip_control(cwd)
     home = str(Path.home())
     if cwd.startswith(home):
         cwd = "~" + cwd[len(home):]
@@ -194,7 +209,10 @@ class Dashboard:
         lines.extend(self._sessions_block(sessions))
         lines.append(rule)
         lines.append("press Ctrl-C to exit · log → stderr · refresh 2s")
-        return "\n".join(lines) + "\n"
+        # Hard-cap each line to terminal width so a narrow terminal doesn't
+        # wrap and corrupt the cursor-home repaint.
+        clipped = [line[:width] if len(line) > width else line for line in lines]
+        return "\n".join(clipped) + "\n"
 
     def _header(self, rl: Optional[RateLimits], active: int) -> str:
         now_s = time.time()
