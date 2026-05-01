@@ -11,6 +11,7 @@ from pathlib import Path
 
 from Xlib import X
 
+from claude_alerts import contexts
 from claude_alerts.binder import Binder
 from claude_alerts.config import Config
 from claude_alerts.dashboard import Dashboard
@@ -34,9 +35,11 @@ class Daemon:
         config: Config,
         persistence_path: Path | None = None,
         dashboard_enabled: bool = True,
+        contexts_dir: Path | None = None,
     ) -> None:
         self.events_dir = events_dir
         self.config = config
+        self.contexts_dir = contexts_dir or default_contexts_dir()
         self.store = SessionStore()
         self.x11 = X11Client()
         self.binder = Binder(self.store, self.x11)
@@ -44,7 +47,10 @@ class Daemon:
         self.persister = (
             BindingPersister(persistence_path) if persistence_path is not None else None
         )
-        self.dashboard = Dashboard(self.store) if dashboard_enabled else None
+        self.dashboard = (
+            Dashboard(self.store, contexts_dir=self.contexts_dir)
+            if dashboard_enabled else None
+        )
         if self.dashboard is not None and self.dashboard.enabled:
             self.store.on_change(self.dashboard.on_session_changed)
         # Bound the binder's manual-bind queue: drop ids whose session was
@@ -52,6 +58,9 @@ class Daemon:
         # daemon with many short-lived non-terminal sessions would grow the
         # queue unboundedly.
         self.store.on_change(self._reap_binder_queue)
+        # Delete the per-session contexts sidecar when the session is removed
+        # (SessionEnd or idle eviction), so contexts/ stays bounded.
+        self.store.on_change(self._cleanup_contexts)
         # Marshal ingester events to the main thread via a thread-safe queue.
         # python-xlib is NOT thread-safe — all X11 calls must run on the main thread.
         self._event_queue: "queue.SimpleQueue[ClaudeEvent]" = queue.SimpleQueue()
@@ -63,6 +72,11 @@ class Daemon:
     def _reap_binder_queue(self, session_id: str) -> None:
         if self.store.get(session_id) is None:
             self.binder.forget_session(session_id)
+
+    def _cleanup_contexts(self, session_id: str) -> None:
+        """Delete the per-session contexts sidecar when a session goes away."""
+        if self.store.get(session_id) is None:
+            contexts.delete(session_id, self.contexts_dir)
 
     def _on_event(self, evt: ClaudeEvent) -> None:
         """Runs on the main thread only — drained from the queue in run().
@@ -110,6 +124,11 @@ class Daemon:
             self.store.on_change(lambda _sid: self.persister.save(self.store.all()))
             # Paint borders for everything we restored.
             self.overlay.sync_all()
+
+        # Remove any contexts/<sid>.json files left behind by a crash before
+        # SessionEnd. After this point, every write to contexts/ is paired with
+        # a matching delete on SessionEnd.
+        contexts.sweep({s.session_id for s in self.store.all()}, self.contexts_dir)
 
         self._ingester_thread = threading.Thread(target=self.ingester.run, daemon=True)
         self._ingester_thread.start()
@@ -191,3 +210,8 @@ def default_log_path() -> Path:
 def default_persistence_path() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
     return Path(base) / "claude-alerts" / "sessions.json"
+
+
+def default_contexts_dir() -> Path:
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "claude-alerts" / "contexts"
