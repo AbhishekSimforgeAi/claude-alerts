@@ -29,11 +29,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+_VALID_SESSION_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,8 @@ def default_contexts_dir() -> Path:
 
 
 def _sidecar_path(session_id: str, base_dir: Path) -> Path:
+    if not _VALID_SESSION_ID.match(session_id):
+        raise ValueError(f"invalid session_id for sidecar path: {session_id!r}")
     return base_dir / f"{session_id}.json"
 
 
@@ -62,7 +67,11 @@ def load(session_id: str, base_dir: Path) -> Optional[ContextUsage]:
     used_percentage null), the corresponding ContextUsage field is left
     as None and the formatter renders '—'.
     """
-    path = _sidecar_path(session_id, base_dir)
+    try:
+        path = _sidecar_path(session_id, base_dir)
+    except ValueError:
+        log.debug("invalid session_id rejected by sidecar reader")
+        return None
     try:
         text = path.read_text()
     except FileNotFoundError:
@@ -105,11 +114,11 @@ def load(session_id: str, base_dir: Path) -> Optional[ContextUsage]:
     used_tokens: Optional[int] = None
     if isinstance(cu, dict):
         try:
-            used_tokens = (
+            used_tokens = max(0, (
                 int(cu.get("input_tokens") or 0)
                 + int(cu.get("cache_creation_input_tokens") or 0)
                 + int(cu.get("cache_read_input_tokens") or 0)
-            )
+            ))
         except (TypeError, ValueError):
             used_tokens = None
 
@@ -123,7 +132,11 @@ def load(session_id: str, base_dir: Path) -> Optional[ContextUsage]:
 
 def delete(session_id: str, base_dir: Path) -> None:
     """Remove a per-session sidecar. Best-effort — missing file is not an error."""
-    path = _sidecar_path(session_id, base_dir)
+    try:
+        path = _sidecar_path(session_id, base_dir)
+    except ValueError:
+        log.debug("invalid session_id rejected by sidecar deleter")
+        return
     try:
         path.unlink()
     except FileNotFoundError:

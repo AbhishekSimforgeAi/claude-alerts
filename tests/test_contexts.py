@@ -122,6 +122,32 @@ def test_load_excludes_output_tokens_from_used(tmp_path):
     assert cu.used_tokens == 8500 + 5000 + 2000
 
 
+def test_load_rejects_path_traversal_session_id(tmp_path):
+    # Defense-in-depth: a session_id containing path separators or '..' must
+    # not be used to read outside base_dir. load() should return None rather
+    # than crashing or escaping the directory.
+    assert contexts.load("../traversal", tmp_path) is None
+
+
+def test_load_clamps_negative_used_tokens_to_zero(tmp_path):
+    payload = _full_payload()
+    payload["context_window"]["current_usage"] = {
+        "input_tokens": -100,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 50,
+        "cache_read_input_tokens": 0,
+    }
+    _write_sidecar(tmp_path, "abc", payload)
+    cu = contexts.load("abc", tmp_path)
+    assert cu is not None
+    assert cu.used_tokens == 0
+
+
+def test_delete_rejects_path_traversal_session_id(tmp_path):
+    # Idempotent best-effort contract: invalid session_id must not raise.
+    contexts.delete("../traversal", tmp_path)
+
+
 def test_delete_removes_sidecar(tmp_path):
     _write_sidecar(tmp_path, "abc", _full_payload())
     contexts.delete("abc", tmp_path)
