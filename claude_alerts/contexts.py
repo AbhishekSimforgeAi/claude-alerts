@@ -81,7 +81,11 @@ def load(session_id: str, base_dir: Path) -> Optional[ContextUsage]:
     if not isinstance(cw, dict):
         return None
 
-    saved_at = float(data.get("saved_at", 0.0) or 0.0)
+    raw_saved_at = data.get("saved_at", 0.0) or 0.0
+    try:
+        saved_at = float(raw_saved_at)
+    except (TypeError, ValueError):
+        saved_at = 0.0
 
     total = cw.get("context_window_size")
     try:
@@ -115,3 +119,35 @@ def load(session_id: str, base_dir: Path) -> Optional[ContextUsage]:
         used_tokens=used_tokens,
         total_tokens=total_tokens,
     )
+
+
+def delete(session_id: str, base_dir: Path) -> None:
+    """Remove a per-session sidecar. Best-effort — missing file is not an error."""
+    path = _sidecar_path(session_id, base_dir)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        log.debug("cannot delete %s: %s", path, e)
+
+
+def sweep(active_session_ids: set[str], base_dir: Path) -> int:
+    """Delete sidecars whose session_id is not in `active_session_ids`.
+
+    Used at daemon startup to clean up files left behind by a crash before
+    SessionEnd fired. Returns the number of files removed.
+    """
+    if not base_dir.is_dir():
+        return 0
+    removed = 0
+    for path in base_dir.glob("*.json"):
+        sid = path.stem
+        if sid in active_session_ids:
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as e:
+            log.debug("sweep: cannot delete %s: %s", path, e)
+    return removed
