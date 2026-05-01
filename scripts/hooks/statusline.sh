@@ -30,6 +30,9 @@ PAYLOAD="$(cat || true)"
 # Fields are joined with U+0001 rather than tab because bash `read` collapses
 # runs of whitespace IFS chars — an empty git.branch would shift session_id and
 # context_window into the wrong slots.
+# Relies on jq never emitting a literal U+0001 in raw output: tojson escapes
+# control chars, and the other extracted fields (model name, cwd, git branch,
+# session_id) cannot contain one in practice.
 JQ_OUT="$(
     printf '%s' "$PAYLOAD" | jq -rj '
         [

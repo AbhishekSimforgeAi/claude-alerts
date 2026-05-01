@@ -62,6 +62,29 @@ def test_writes_contexts_sidecar(tmp_path):
 
 
 @pytest.mark.skipif(not has_jq(), reason="jq is required")
+def test_empty_git_branch_does_not_corrupt_parse(tmp_path):
+    """Regression test for the U+0001 separator switch.
+
+    With the previous tab separator, an empty git.branch value caused
+    bash `read` to collapse the whitespace and shift later fields,
+    producing the wrong session_id (or none). Verifies the contexts
+    sidecar still lands at the correct path when the payload has no
+    git block.
+    """
+    payload = _full_payload("regression-test-sid")
+    # Note: _full_payload already omits the .git key.
+    _run(payload, tmp_path)
+    # The sidecar must land under the unsanitized session_id we passed,
+    # not under "" or some shifted MODEL value.
+    sidecar = tmp_path / "contexts" / "regression-test-sid.json"
+    assert sidecar.exists(), \
+        f"sidecar not at expected path; contents of {tmp_path / 'contexts'}: " \
+        f"{list((tmp_path / 'contexts').glob('*'))}"
+    data = json.loads(sidecar.read_text())
+    assert data["session_id"] == "regression-test-sid"
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required")
 def test_no_context_window_does_not_write_sidecar(tmp_path):
     payload = _full_payload()
     del payload["context_window"]
