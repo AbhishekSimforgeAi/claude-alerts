@@ -39,7 +39,7 @@ class Daemon:
     ) -> None:
         self.events_dir = events_dir
         self.config = config
-        self.contexts_dir = contexts_dir or default_contexts_dir()
+        self.contexts_dir = contexts_dir or contexts.default_contexts_dir()
         self.store = SessionStore()
         self.x11 = X11Client()
         self.binder = Binder(self.store, self.x11)
@@ -210,8 +210,3 @@ def default_log_path() -> Path:
 def default_persistence_path() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
     return Path(base) / "claude-alerts" / "sessions.json"
-
-
-def default_contexts_dir() -> Path:
-    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "claude-alerts" / "contexts"
