@@ -39,6 +39,38 @@ def test_rejects_unknown_event(tmp_path):
         parse_event_file(p)
 
 
+def test_accepts_permission_request_event(tmp_path):
+    """Sandbox prompts emit PermissionRequest; the parser must accept it."""
+    p = write_event(
+        tmp_path,
+        {
+            "event": "PermissionRequest",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+        },
+    )
+    evt = parse_event_file(p)
+    assert evt.event == "PermissionRequest"
+
+
+def test_accepts_elicitation_event(tmp_path):
+    """MCP elicitation dialogs emit Elicitation; the parser must accept it."""
+    p = write_event(
+        tmp_path,
+        {
+            "event": "Elicitation",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+        },
+    )
+    evt = parse_event_file(p)
+    assert evt.event == "Elicitation"
+
+
 def test_rejects_missing_field(tmp_path):
     p = write_event(tmp_path, {"event": "Stop", "session_id": "x"})
     with pytest.raises(EventParseError, match="missing field"):
@@ -103,4 +135,51 @@ def test_rejects_int_session_id(tmp_path):
         "event": "Stop", "session_id": 12345, "cwd": "/", "claude_pid": 1, "timestamp": 1.0,
     })
     with pytest.raises(EventParseError, match="session_id"):
+        parse_event_file(p)
+
+
+def test_parses_tool_name_when_present(tmp_path):
+    p = write_event(
+        tmp_path,
+        {
+            "event": "PostToolUse",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+            "tool_name": "Monitor",
+        },
+    )
+    evt = parse_event_file(p)
+    assert evt.tool_name == "Monitor"
+
+
+def test_tool_name_defaults_to_none_when_absent(tmp_path):
+    p = write_event(
+        tmp_path,
+        {
+            "event": "Stop",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+        },
+    )
+    evt = parse_event_file(p)
+    assert evt.tool_name is None
+
+
+def test_rejects_non_string_tool_name(tmp_path):
+    p = write_event(
+        tmp_path,
+        {
+            "event": "PostToolUse",
+            "session_id": "abc",
+            "cwd": "/p",
+            "claude_pid": 1,
+            "timestamp": 1.0,
+            "tool_name": 42,
+        },
+    )
+    with pytest.raises(EventParseError, match="tool_name"):
         parse_event_file(p)

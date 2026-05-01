@@ -231,3 +231,46 @@ def test_try_bind_queues_when_frame_resolution_fails():
     binder.try_bind("s1")
     assert store.get("s1").bound_window_id is None
     assert binder.pending_manual_binds() == ["s1"]
+
+
+def test_forget_session_drops_from_pending():
+    """When a session is removed (SessionEnd / eviction), the queue must
+    drop its id so a long-running daemon doesn't leak entries."""
+    class NonTerminalX11:
+        def get_active_window_id(self):
+            return 0xAB
+        def get_wm_class(self, wid):
+            return "google-chrome"
+
+    store = SessionStore()
+    binder = Binder(store, NonTerminalX11())
+    store.apply_event(evt("SessionStart", session_id="s1"))
+    store.apply_event(evt("SessionStart", session_id="s2"))
+    binder.try_bind("s1")
+    binder.try_bind("s2")
+    assert sorted(binder.pending_manual_binds()) == ["s1", "s2"]
+    binder.forget_session("s1")
+    assert binder.pending_manual_binds() == ["s2"]
+    binder.forget_session("never-was-pending")  # silent no-op
+    assert binder.pending_manual_binds() == ["s2"]
+
+
+def test_pending_manual_binds_reaps_dead_sessions():
+    """If a session is removed without forget_session being called, the next
+    pending_manual_binds() read self-heals — defensive for code paths that
+    forget to call forget_session."""
+    class NonTerminalX11:
+        def get_active_window_id(self):
+            return 0xAB
+        def get_wm_class(self, wid):
+            return "google-chrome"
+
+    store = SessionStore()
+    binder = Binder(store, NonTerminalX11())
+    store.apply_event(evt("SessionStart", session_id="s1"))
+    binder.try_bind("s1")
+    # Remove the session at the store level without telling the binder.
+    store.apply_event(ClaudeEvent(
+        event="SessionEnd", session_id="s1", cwd="/p", claude_pid=1, timestamp=2.0,
+    ))
+    assert binder.pending_manual_binds() == []

@@ -3,7 +3,7 @@ Real visual behaviour is verified in test_e2e_xvfb.py."""
 
 from claude_alerts.config import Config
 from claude_alerts.events import ClaudeEvent
-from claude_alerts.sessions import SessionStore
+from claude_alerts.sessions import SessionStore, Status
 from claude_alerts.x11 import Geometry
 
 
@@ -307,3 +307,138 @@ def test_overlay_destroyed_on_unbind(monkeypatch):
     store.set_bound_window("s1", None)
     assert overlay_win.destroyed
     assert not mgr.has_overlay("s1")
+
+
+# --- color_for tests ----------------------------------------------------------
+
+
+def _green_pixel():
+    from claude_alerts.overlay import _rgb_to_pixel, hex_to_rgb
+    return _rgb_to_pixel(hex_to_rgb(Config().color_working))
+
+
+def _red_pixel():
+    from claude_alerts.overlay import _rgb_to_pixel, hex_to_rgb
+    return _rgb_to_pixel(hex_to_rgb(Config().color_waiting))
+
+
+def test_color_for_working_is_green(monkeypatch):
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    s = store.get("s1")
+    assert mgr.color_for(s) == _green_pixel()
+
+
+def test_color_for_stop_with_background_active_is_green(monkeypatch):
+    """The headline fix: Stop after Monitor stays green."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="PostToolUse", session_id="s1", cwd="/p", claude_pid=1,
+        timestamp=2.0, tool_name="Monitor",
+    ))
+    store.apply_event(ClaudeEvent(
+        event="Stop", session_id="s1", cwd="/p", claude_pid=1, timestamp=3.0,
+    ))
+    s = store.get("s1")
+    assert s.status == Status.WAITING
+    assert s.background_active is True
+    assert mgr.color_for(s) == _green_pixel()
+
+
+def test_color_for_notification_with_background_active_is_red(monkeypatch):
+    """Permission prompts still demand attention even with a Monitor alive."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="PostToolUse", session_id="s1", cwd="/p", claude_pid=1,
+        timestamp=2.0, tool_name="Monitor",
+    ))
+    store.apply_event(ClaudeEvent(
+        event="Notification", session_id="s1", cwd="/p", claude_pid=1, timestamp=3.0,
+    ))
+    s = store.get("s1")
+    assert s.background_active is True
+    assert s.last_event == "Notification"
+    assert mgr.color_for(s) == _red_pixel()
+
+
+def test_color_for_stop_without_background_active_is_red(monkeypatch):
+    """Plain Stop with no background task: red, as before."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    store.apply_event(ClaudeEvent(
+        event="Stop", session_id="s1", cwd="/p", claude_pid=1, timestamp=3.0,
+    ))
+    s = store.get("s1")
+    assert s.background_active is False
+    assert mgr.color_for(s) == _red_pixel()
+
+
+def test_color_for_permission_request_is_red(monkeypatch):
+    """Sandbox permission prompt (e.g. 'Network request outside of sandbox')
+    fires PermissionRequest mid-tool-call and the user must act — red."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    store.apply_event(ClaudeEvent(
+        event="PreToolUse", session_id="s1", cwd="/p", claude_pid=1,
+        timestamp=3.0, tool_name="Bash",
+    ))
+    store.apply_event(ClaudeEvent(
+        event="PermissionRequest", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=4.0,
+    ))
+    s = store.get("s1")
+    assert s.status == Status.WAITING
+    assert s.last_event == "PermissionRequest"
+    assert mgr.color_for(s) == _red_pixel()
+
+
+def test_color_for_permission_request_with_background_active_is_red(monkeypatch):
+    """PermissionRequest must override green-during-pause exactly like
+    Notification — the user is being asked something, regardless of any
+    background task that's also alive."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="PostToolUse", session_id="s1", cwd="/p", claude_pid=1,
+        timestamp=2.0, tool_name="Monitor",
+    ))
+    store.apply_event(ClaudeEvent(
+        event="PermissionRequest", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=3.0,
+    ))
+    s = store.get("s1")
+    assert s.background_active is True
+    assert s.last_event == "PermissionRequest"
+    assert mgr.color_for(s) == _red_pixel()
+
+
+def test_color_for_elicitation_with_background_active_is_red(monkeypatch):
+    """Elicitation (MCP user-input dialog) overrides green-during-pause too."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="PostToolUse", session_id="s1", cwd="/p", claude_pid=1,
+        timestamp=2.0, tool_name="Monitor",
+    ))
+    store.apply_event(ClaudeEvent(
+        event="Elicitation", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=3.0,
+    ))
+    s = store.get("s1")
+    assert s.background_active is True
+    assert s.last_event == "Elicitation"
+    assert mgr.color_for(s) == _red_pixel()

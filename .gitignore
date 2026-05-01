@@ -1,4 +1,28 @@
-.superpowers/
-.venv/
+# Python
 __pycache__/
+*.pyc
+*.pyo
 *.egg-info/
+.eggs/
+build/
+dist/
+
+# Tooling caches
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*~
+
+# Project-specific
+.superpowers/
+.claude/

@@ -14,6 +14,7 @@ from claude_alerts.daemon import (
     default_config_path,
     default_events_dir,
     default_log_path,
+    default_persistence_path,
 )
 
 
@@ -37,6 +38,22 @@ def main() -> int:
     p = argparse.ArgumentParser(prog="claude-alerts")
     p.add_argument("--events-dir", type=Path, default=None)
     p.add_argument("--config", type=Path, default=None)
+    p.add_argument(
+        "--no-persistence",
+        action="store_true",
+        help="Don't load or save bindings across restarts.",
+    )
+    p.add_argument(
+        "--persistence-path",
+        type=Path,
+        default=None,
+        help="Override path to the sessions.json snapshot.",
+    )
+    p.add_argument(
+        "--no-dashboard",
+        action="store_true",
+        help="Don't render the per-session usage dashboard, even on a TTY.",
+    )
     args = p.parse_args()
 
     config_path = args.config or default_config_path()
@@ -45,9 +62,18 @@ def main() -> int:
     configure_logging(cfg.log_level, log_path)
 
     events_dir = args.events_dir or default_events_dir()
+    persistence_path = (
+        None if args.no_persistence
+        else (args.persistence_path or default_persistence_path())
+    )
 
     try:
-        daemon = Daemon(events_dir=events_dir, config=cfg)
+        daemon = Daemon(
+            events_dir=events_dir,
+            config=cfg,
+            persistence_path=persistence_path,
+            dashboard_enabled=not args.no_dashboard,
+        )
     except Exception as e:
         msg = f"claude-alerts: cannot start daemon: {e}"
         print(msg, file=sys.stderr)

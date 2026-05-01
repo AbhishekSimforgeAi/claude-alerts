@@ -7,7 +7,12 @@ from Xlib import X, Xatom
 from Xlib.ext import shape
 
 from claude_alerts.config import Config
-from claude_alerts.sessions import Session, SessionStore, Status
+from claude_alerts.sessions import (
+    Session,
+    SessionStore,
+    Status,
+    USER_ACTION_EVENTS,
+)
 from claude_alerts.x11 import Geometry, X11Client
 
 log = logging.getLogger(__name__)
@@ -124,8 +129,21 @@ class OverlayManager:
         self._waiting_pixel = _rgb_to_pixel(hex_to_rgb(config.color_waiting))
         store.on_change(self.on_session_changed)
 
-    def color_for(self, status: Status) -> int:
-        return self._working_pixel if status == Status.WORKING else self._waiting_pixel
+    def color_for(self, session: Session) -> int:
+        """Pick the overlay color for a session.
+
+        Green when Claude is actively WORKING, or when the session has an
+        autonomous wake-up alive (background_active) and the most recent
+        event was not a user-action event. User-action events (Notification,
+        PermissionRequest) always paint red, because they mean the user
+        must act, even if a background task is also alive.
+        """
+        if session.status == Status.WORKING:
+            return self._working_pixel
+        # status == WAITING from here.
+        if session.background_active and session.last_event not in USER_ACTION_EVENTS:
+            return self._working_pixel
+        return self._waiting_pixel
 
     def on_session_changed(self, session_id: str) -> None:
         session = self.store.get(session_id)
@@ -169,6 +187,16 @@ class OverlayManager:
     def has_overlay(self, session_id: str) -> bool:
         return session_id in self._overlays
 
+    def sync_all(self) -> None:
+        """Force a paint pass over every session in the store.
+
+        Used at daemon startup after restoring persisted bindings, so the
+        borders appear without waiting for the next hook event to fire
+        on_session_changed.
+        """
+        for session in self.store.all():
+            self._sync_one(session)
+
     def _sync_one(self, session: Session) -> None:
         if session.bound_window_id is None:
             self._destroy(session.session_id)
@@ -178,7 +206,7 @@ class OverlayManager:
             self._destroy(session.session_id)
             return
         existing = self._overlays.get(session.session_id)
-        color_pixel = self.color_for(session.status)
+        color_pixel = self.color_for(session)
         if existing is None:
             self._overlays[session.session_id] = _OverlayWindow(
                 self.x11, geo, color_pixel, self.config.border_thickness_px,

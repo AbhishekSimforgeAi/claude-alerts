@@ -16,7 +16,7 @@ spec.loader.exec_module(install_hooks)
 HOOK_PATH = "/abs/path/to/emit-event.sh"
 HOOK_EVENTS = (
     "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-    "Stop", "Notification", "SessionEnd",
+    "Stop", "Notification", "PermissionRequest", "Elicitation", "SessionEnd",
 )
 
 
@@ -123,3 +123,45 @@ def test_preserves_file_permissions(tmp_path):
     install_hooks.merge_hooks_into(settings, HOOK_PATH)
     mode = stat.S_IMODE(settings.stat().st_mode)
     assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+# ---------------------------------------------------------------------------
+# statusLine installation
+# ---------------------------------------------------------------------------
+
+STATUSLINE = "/abs/path/to/statusline.sh"
+
+
+def test_installs_statusline_when_absent(tmp_path):
+    settings = tmp_path / "settings.json"
+    install_hooks.merge_hooks_into(settings, HOOK_PATH, statusline_path=STATUSLINE)
+    data = json.loads(settings.read_text())
+    assert data["statusLine"] == {"type": "command", "command": STATUSLINE}
+
+
+def test_does_not_overwrite_existing_statusline(tmp_path, capsys):
+    """If the user has a custom statusLine, never clobber it. Print a hint instead."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "statusLine": {"type": "command", "command": "/their/own/statusline.sh"},
+    }))
+    install_hooks.merge_hooks_into(settings, HOOK_PATH, statusline_path=STATUSLINE)
+    data = json.loads(settings.read_text())
+    assert data["statusLine"]["command"] == "/their/own/statusline.sh"
+    captured = capsys.readouterr()
+    assert "not overwriting" in captured.out
+
+
+def test_statusline_install_is_idempotent(tmp_path):
+    settings = tmp_path / "settings.json"
+    install_hooks.merge_hooks_into(settings, HOOK_PATH, statusline_path=STATUSLINE)
+    install_hooks.merge_hooks_into(settings, HOOK_PATH, statusline_path=STATUSLINE)
+    data = json.loads(settings.read_text())
+    assert data["statusLine"]["command"] == STATUSLINE
+
+
+def test_statusline_skipped_when_path_is_none(tmp_path):
+    settings = tmp_path / "settings.json"
+    install_hooks.merge_hooks_into(settings, HOOK_PATH, statusline_path=None)
+    data = json.loads(settings.read_text())
+    assert "statusLine" not in data
