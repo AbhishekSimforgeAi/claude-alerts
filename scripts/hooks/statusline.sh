@@ -25,19 +25,24 @@ chmod 700 "$STATE_DIR" 2>/dev/null || true
 
 PAYLOAD="$(cat || true)"
 
-# Single jq pass to extract everything we need; cheaper than four invocations.
+# Single jq pass to extract everything we need; cheaper than several invocations.
 # `|| true` keeps `set -e` from killing us when jq fails (e.g. malformed JSON).
+# Fields are joined with U+0001 rather than tab because bash `read` collapses
+# runs of whitespace IFS chars — an empty git.branch would shift session_id and
+# context_window into the wrong slots.
 JQ_OUT="$(
-    printf '%s' "$PAYLOAD" | jq -r '
+    printf '%s' "$PAYLOAD" | jq -rj '
         [
             (.rate_limits | tojson),
             (.model.display_name // .model.id // ""),
             (.workspace.current_dir // .cwd // ""),
-            (.git.branch // "")
-        ] | @tsv
-    ' 2>/dev/null || printf '\t\t\t'
+            (.git.branch // ""),
+            (.session_id // ""),
+            (.context_window | tojson)
+        ] | join("")
+    ' 2>/dev/null || printf '\x01\x01\x01\x01\x01'
 )"
-IFS=$'\t' read -r RATE_LIMITS MODEL CWD BRANCH <<< "${JQ_OUT:-$'\t\t\t'}"
+IFS=$'\x01' read -r RATE_LIMITS MODEL CWD BRANCH SESSION_ID CONTEXT_WINDOW <<< "${JQ_OUT:-$'\x01\x01\x01\x01\x01'}"
 
 # Persist rate_limits if the input had any. Validate that it's parseable JSON
 # before writing — defends against jq output with malformed `tojson` results.
@@ -48,6 +53,25 @@ if [ -n "${RATE_LIMITS:-}" ] && [ "$RATE_LIMITS" != "null" ] \
     OUT="$STATE_DIR/rate_limits.json"
     # Open with restrictive umask so the sidecar inherits 0600.
     (umask 077 && printf '{"saved_at": %s, "rate_limits": %s}\n' "$TS" "$RATE_LIMITS" > "$TMP")
+    mv "$TMP" "$OUT"
+fi
+
+# Persist per-session context_window. session_id is sanitized against an
+# allowlist before being interpolated into the filename — it must match
+# ^[A-Za-z0-9._-]+$, otherwise a hostile session id could write outside
+# the contexts dir or smuggle shell metacharacters.
+CONTEXTS_DIR="$STATE_DIR/contexts"
+if [ -n "${SESSION_ID:-}" ] && [ -n "${CONTEXT_WINDOW:-}" ] \
+        && [ "$CONTEXT_WINDOW" != "null" ] \
+        && [[ "$SESSION_ID" =~ ^[A-Za-z0-9._-]+$ ]] \
+        && printf '%s' "$CONTEXT_WINDOW" | jq -e . >/dev/null 2>&1; then
+    mkdir -p -m 700 "$CONTEXTS_DIR"
+    chmod 700 "$CONTEXTS_DIR" 2>/dev/null || true
+    TS="$(date +%s.%N)"
+    TMP="$CONTEXTS_DIR/$SESSION_ID.json.tmp"
+    OUT="$CONTEXTS_DIR/$SESSION_ID.json"
+    (umask 077 && printf '{"saved_at": %s, "session_id": "%s", "context_window": %s}\n' \
+        "$TS" "$SESSION_ID" "$CONTEXT_WINDOW" > "$TMP")
     mv "$TMP" "$OUT"
 fi
 
