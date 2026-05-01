@@ -6,13 +6,16 @@ import json
 import time
 from pathlib import Path
 
+from claude_alerts.contexts import ContextUsage
 from claude_alerts.dashboard import (
     Dashboard,
     _bar,
     _format_age,
+    _format_ctx,
     _format_resets_in,
     _short_cwd,
     _short_id,
+    _short_tokens,
 )
 from claude_alerts.events import ClaudeEvent
 from claude_alerts.sessions import SessionStore
@@ -175,3 +178,72 @@ def test_dashboard_truncates_lines_to_width(tmp_path):
     text = d._build_lines(width=20)
     for line in text.splitlines():
         assert len(line) <= 20, f"line longer than 20: {line!r}"
+
+
+def test_short_tokens_under_thousand():
+    from claude_alerts.dashboard import _short_tokens
+    assert _short_tokens(0) == "0"
+    assert _short_tokens(850) == "850"
+
+
+def test_short_tokens_thousands():
+    from claude_alerts.dashboard import _short_tokens
+    assert _short_tokens(1000) == "1k"
+    assert _short_tokens(90_000) == "90k"
+    assert _short_tokens(199_500) == "200k"   # rounds to nearest 1000
+    assert _short_tokens(200_000) == "200k"
+
+
+def test_short_tokens_millions():
+    from claude_alerts.dashboard import _short_tokens
+    assert _short_tokens(1_000_000) == "1.0M"
+    assert _short_tokens(1_200_000) == "1.2M"
+
+
+def test_format_ctx_none_returns_dash():
+    from claude_alerts.dashboard import _format_ctx
+    assert _format_ctx(None).strip() == "—"
+
+
+def test_format_ctx_partial_data_returns_dash():
+    from claude_alerts.dashboard import _format_ctx
+    cu = ContextUsage(saved_at=1.0, used_percentage=None,
+                      used_tokens=100, total_tokens=200000)
+    assert _format_ctx(cu).strip() == "—"
+    cu = ContextUsage(saved_at=1.0, used_percentage=10.0,
+                      used_tokens=None, total_tokens=200000)
+    assert _format_ctx(cu).strip() == "—"
+    cu = ContextUsage(saved_at=1.0, used_percentage=10.0,
+                      used_tokens=100, total_tokens=None)
+    assert _format_ctx(cu).strip() == "—"
+
+
+def test_format_ctx_normal():
+    from claude_alerts.dashboard import _format_ctx
+    cu = ContextUsage(saved_at=1.0, used_percentage=45.2,
+                      used_tokens=90_000, total_tokens=200_000)
+    assert _format_ctx(cu).strip() == "45% (90k/200k)"
+
+
+def test_format_ctx_under_one_percent():
+    from claude_alerts.dashboard import _format_ctx
+    cu = ContextUsage(saved_at=1.0, used_percentage=0.4,
+                      used_tokens=800, total_tokens=200_000)
+    assert _format_ctx(cu).strip() == "<1% (800/200k)"
+
+
+def test_format_ctx_extended_context():
+    from claude_alerts.dashboard import _format_ctx
+    cu = ContextUsage(saved_at=1.0, used_percentage=55.5,
+                      used_tokens=550_000, total_tokens=1_000_000)
+    assert _format_ctx(cu).strip() == "56% (550k/1.0M)"
+
+
+def test_format_ctx_padded_to_fixed_width():
+    """The CTX field is left-justified, padded to 16 chars so CWD stays aligned."""
+    from claude_alerts.dashboard import _format_ctx
+    cu = ContextUsage(saved_at=1.0, used_percentage=45.2,
+                      used_tokens=90_000, total_tokens=200_000)
+    assert _format_ctx(cu) == "45% (90k/200k)  "  # 14 + 2 padding = 16
+    assert len(_format_ctx(cu)) == 16
+    assert len(_format_ctx(None)) == 16

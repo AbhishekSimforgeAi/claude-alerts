@@ -33,7 +33,8 @@ import time
 from pathlib import Path
 from typing import Optional, TextIO
 
-from claude_alerts import limits
+from claude_alerts import contexts, limits
+from claude_alerts.contexts import ContextUsage
 from claude_alerts.limits import (
     Limit,
     RateLimits,
@@ -108,6 +109,40 @@ def _format_age(now_s: float, saved_at: float) -> str:
     if delta < 3600:
         return f"{delta // 60}m ago"
     return f"{delta // 3600}h ago"
+
+
+def _short_tokens(n: int) -> str:
+    """Compact token-count formatting matching what /context shows.
+
+    <1000      -> '850'
+    <1_000_000 -> '90k' (rounded to nearest thousand)
+    >=1_000_000 -> '1.0M' (one decimal place)
+    """
+    if n < 1_000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{round(n / 1_000)}k"
+    return f"{n / 1_000_000:.1f}M"
+
+
+def _format_ctx(cu: "ContextUsage | None") -> str:
+    """Format a ContextUsage as a fixed-width 16-char left-justified string.
+
+    Returns the en-dash '—' (padded) when `cu` is None or any required
+    field is None. Sub-1% non-zero usage renders as '<1% (...)' rather
+    than '0% (...)' so the user knows tokens are accumulating.
+    """
+    width = 16
+    if cu is None or cu.used_percentage is None or cu.used_tokens is None or cu.total_tokens is None:
+        return f"{'—':<{width}}"
+    used = _short_tokens(cu.used_tokens)
+    total = _short_tokens(cu.total_tokens)
+    if 0 < cu.used_percentage < 1:
+        text = f"<1% ({used}/{total})"
+    else:
+        pct = int(round(cu.used_percentage))
+        text = f"{pct}% ({used}/{total})"
+    return f"{text:<{width}}"
 
 
 class Dashboard:
