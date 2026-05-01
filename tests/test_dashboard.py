@@ -247,3 +247,102 @@ def test_format_ctx_padded_to_fixed_width():
     assert _format_ctx(cu) == "45% (90k/200k)  "  # 14 + 2 padding = 16
     assert len(_format_ctx(cu)) == 16
     assert len(_format_ctx(None)) == 16
+
+
+def test_dashboard_renders_ctx_column_with_data(tmp_path):
+    """When a session has a contexts sidecar, the CTX column shows the percent."""
+    contexts_dir = tmp_path / "contexts"
+    contexts_dir.mkdir()
+    sid = "ctxtest1-aaaaaaaa"
+    (contexts_dir / f"{sid}.json").write_text(json.dumps({
+        "saved_at": 1.0,
+        "session_id": sid,
+        "context_window": {
+            "context_window_size": 200000,
+            "used_percentage": 45.2,
+            "current_usage": {
+                "input_tokens": 80_000,
+                "output_tokens": 5_000,
+                "cache_creation_input_tokens": 6_000,
+                "cache_read_input_tokens": 4_000,
+            },
+        },
+    }))
+
+    store = SessionStore()
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id=sid, cwd=str(tmp_path),
+        claude_pid=1, timestamp=1.0,
+    ))
+
+    d = Dashboard(
+        store,
+        sidecar_path=tmp_path / "absent.json",
+        contexts_dir=contexts_dir,
+        force_render=True,
+    )
+    text = d.render_string()
+    assert "CTX" in text
+    # 80_000 + 6_000 + 4_000 = 90_000 -> 90k. Percent rounds to 45.
+    assert "45% (90k/200k)" in text
+
+
+def test_dashboard_renders_em_dash_when_no_contexts_data(tmp_path):
+    contexts_dir = tmp_path / "contexts"  # never created
+    sid = "noctxd1-aaaaaaaa"
+    store = SessionStore()
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id=sid, cwd=str(tmp_path),
+        claude_pid=1, timestamp=1.0,
+    ))
+    d = Dashboard(
+        store,
+        sidecar_path=tmp_path / "absent.json",
+        contexts_dir=contexts_dir,
+        force_render=True,
+    )
+    text = d.render_string()
+    # Em-dash appears in the rendered table (we don't assert exact alignment
+    # here — the helper-level test already covers that).
+    assert "—" in text
+
+
+def test_dashboard_session_block_keeps_cwd_aligned(tmp_path):
+    """Mixed rows (one with data, one without) — CWD column stays at the same
+    horizontal position so the table stays readable."""
+    contexts_dir = tmp_path / "contexts"
+    contexts_dir.mkdir()
+    sid_with = "withctx1-aaaaaaaa"
+    (contexts_dir / f"{sid_with}.json").write_text(json.dumps({
+        "saved_at": 1.0,
+        "session_id": sid_with,
+        "context_window": {
+            "context_window_size": 200000,
+            "used_percentage": 10.0,
+            "current_usage": {
+                "input_tokens": 18000, "output_tokens": 0,
+                "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 1000,
+            },
+        },
+    }))
+    sid_without = "noctx1aa-bbbbbbbb"
+
+    store = SessionStore()
+    for sid in (sid_with, sid_without):
+        store.apply_event(ClaudeEvent(
+            event="UserPromptSubmit", session_id=sid, cwd="/work",
+            claude_pid=1, timestamp=1.0,
+        ))
+
+    d = Dashboard(
+        store,
+        sidecar_path=tmp_path / "absent.json",
+        contexts_dir=contexts_dir,
+        force_render=True,
+    )
+    text = d.render_string()
+    rows = [r for r in text.splitlines() if "/work" in r]
+    assert len(rows) == 2
+    # CWD lives at the same column index in both rows.
+    cwd_cols = [r.index("/work") for r in rows]
+    assert cwd_cols[0] == cwd_cols[1]

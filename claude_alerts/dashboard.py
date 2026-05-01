@@ -163,9 +163,11 @@ class Dashboard:
         sidecar_path: Optional[Path] = None,
         out: Optional[TextIO] = None,
         force_render: bool = False,
+        contexts_dir: Optional[Path] = None,
     ) -> None:
         self.store = store
         self.sidecar_path = sidecar_path or default_sidecar_path()
+        self.contexts_dir = contexts_dir or contexts.default_contexts_dir()
         self.out = out if out is not None else sys.stdout
         self.enabled = force_render or self._is_tty(self.out)
         self._dirty = True
@@ -287,9 +289,12 @@ class Dashboard:
     def _sessions_block(self, sessions: list[Session]) -> list[str]:
         if not sessions:
             return ["  no active sessions."]
-        rows = ["  SESSION   STATUS     CWD"]
+        # CTX column is fixed-width 16 (see _format_ctx).
+        rows = [f"  SESSION   STATUS     {'CTX':<16}  CWD"]
         for s in sessions:
             sid = _short_id(s.session_id)
             cwd = _short_cwd(s.cwd)
-            rows.append(f"  {sid:<8}  {_status_marker(s.status):<9}  {cwd}")
+            cu = contexts.load(s.session_id, self.contexts_dir)
+            ctx = _format_ctx(cu)
+            rows.append(f"  {sid:<8}  {_status_marker(s.status):<9}  {ctx}  {cwd}")
         return rows
