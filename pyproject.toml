@@ -29,9 +29,9 @@ dependencies = [
     "tomli>=2.0; python_version<'3.11'",
 ]
 
-# Set [project.urls] when the repo is published, e.g.
-# Homepage = "https://github.com/<owner>/claude-alerts"
-# Issues   = "https://github.com/<owner>/claude-alerts/issues"
+[project.urls]
+Homepage = "https://github.com/AbhishekSimforgeAi/claude-alerts"
+Issues   = "https://github.com/AbhishekSimforgeAi/claude-alerts/issues"
 
 [project.optional-dependencies]
 dev = [

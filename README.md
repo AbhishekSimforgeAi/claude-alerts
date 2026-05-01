@@ -45,7 +45,7 @@ sudo apt install -y xvfb
 ## Install
 
 ```sh
-git clone <this-repo> ~/src/claude-alerts
+git clone https://github.com/AbhishekSimforgeAi/claude-alerts ~/src/claude-alerts
 cd ~/src/claude-alerts
 
 # install into a dedicated venv
