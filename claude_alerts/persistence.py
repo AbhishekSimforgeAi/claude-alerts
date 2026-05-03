@@ -32,22 +32,29 @@ def _session_to_dict(s: Session) -> dict:
         "background_active": s.background_active,
         "bound_window_id": s.bound_window_id,
         "client_window_id": s.client_window_id,
+        "first_seen_at": s.first_seen_at,
     }
 
 
 def _dict_to_session(d: dict) -> Optional[Session]:
     """Reconstruct a Session from a persisted dict. Returns None on shape errors."""
     try:
+        last_event_at = float(d["last_event_at"])
+        # Pre-#3 bindings files don't carry first_seen_at — fall back to
+        # last_event_at so existing sessions still get a plausible
+        # appearance timestamp for the dashboard sort.
+        first_seen_at = float(d["first_seen_at"]) if "first_seen_at" in d else last_event_at
         return Session(
             session_id=str(d["session_id"]),
             cwd=str(d["cwd"]),
             claude_pid=int(d["claude_pid"]),
             status=Status(d["status"]),
-            last_event_at=float(d["last_event_at"]),
+            last_event_at=last_event_at,
             bound_window_id=int(d["bound_window_id"]) if d.get("bound_window_id") is not None else None,
             client_window_id=int(d["client_window_id"]) if d.get("client_window_id") is not None else None,
             last_event=str(d.get("last_event", "")),
             background_active=bool(d.get("background_active", False)),
+            first_seen_at=first_seen_at,
         )
     except (KeyError, TypeError, ValueError) as e:
         log.warning("persisted session entry rejected: %s (%r)", e, d)

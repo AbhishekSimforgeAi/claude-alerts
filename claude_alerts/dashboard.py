@@ -233,10 +233,10 @@ class Dashboard:
 
     def _build_lines(self, width: int) -> str:
         rl = self._cached_limits
-        sessions = sorted(
-            self.store.all(),
-            key=lambda s: (s.status != Status.WORKING, -s.last_event_at),
-        )
+        # Sort by first_seen_at ascending so a row's position is stable across
+        # status flips (WORKING ↔ WAITING) and event refreshes — once a session
+        # registers, it stays where it is until it ends.
+        sessions = sorted(self.store.all(), key=lambda s: s.first_seen_at)
         rule = "─" * min(width, 100)
         lines: list[str] = []
         lines.append(self._header(rl, len(sessions)))

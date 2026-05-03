@@ -307,6 +307,54 @@ def test_dashboard_renders_em_dash_when_no_contexts_data(tmp_path):
     assert "—" in text
 
 
+def test_dashboard_sorts_sessions_by_first_seen_at_ascending(tmp_path):
+    """Once a session registers, it sits at the row determined by its
+    first_seen_at. Earlier sessions are higher in the list."""
+    store = SessionStore()
+    # Insert "late" first, then "early" — order of insertion must not matter.
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="late0001-x", cwd="/work",
+        claude_pid=1, timestamp=200.0,
+    ))
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="early001-x", cwd="/work",
+        claude_pid=1, timestamp=100.0,
+    ))
+    d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
+    text = d.render_string()
+    rows = [r for r in text.splitlines() if "/work" in r]
+    assert len(rows) == 2
+    assert "early001" in rows[0]
+    assert "late0001" in rows[1]
+
+
+def test_dashboard_row_position_stable_across_status_flip(tmp_path):
+    """Acceptance criterion: a session flipping WORKING ↔ WAITING does
+    not change its row position. Under the old (status-first) sort, the
+    later session would jump to the top when it became WORKING."""
+    store = SessionStore()
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="early001-x", cwd="/work",
+        claude_pid=1, timestamp=100.0,
+    ))
+    store.apply_event(ClaudeEvent(
+        event="Stop", session_id="late0001-x", cwd="/work",
+        claude_pid=1, timestamp=200.0,
+    ))
+    d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
+    rows_before = [r for r in d.render_string().splitlines() if "/work" in r]
+
+    # late0001 flips WAITING → WORKING. Old sort would move it above early001.
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="late0001-x", cwd="/work",
+        claude_pid=1, timestamp=300.0,
+    ))
+    rows_after = [r for r in d.render_string().splitlines() if "/work" in r]
+
+    assert "early001" in rows_before[0] and "late0001" in rows_before[1]
+    assert "early001" in rows_after[0] and "late0001" in rows_after[1]
+
+
 def test_dashboard_session_block_keeps_cwd_aligned(tmp_path):
     """Mixed rows (one with data, one without) — CWD column stays at the same
     horizontal position so the table stays readable."""

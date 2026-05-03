@@ -208,6 +208,25 @@ def test_one_buggy_listener_does_not_break_others():
     assert seen == ["s1"]
 
 
+def test_first_seen_at_set_on_creation():
+    """A newly created session records the wall-clock time it was first observed,
+    so the dashboard can sort rows by appearance order."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart", t=42.0))
+    assert store.get("s1").first_seen_at == 42.0
+
+
+def test_first_seen_at_unchanged_on_subsequent_events():
+    """first_seen_at is a stable identity for the session — last_event_at advances,
+    first_seen_at does not."""
+    store = SessionStore()
+    store.apply_event(evt("SessionStart", t=1.0))
+    store.apply_event(evt("UserPromptSubmit", t=99.0))
+    s = store.get("s1")
+    assert s.first_seen_at == 1.0
+    assert s.last_event_at == 99.0
+
+
 def test_apply_event_stamps_last_event():
     """Session.last_event records the name of the most recently applied event,
     so the overlay can distinguish Stop-WAITING from Notification-WAITING."""

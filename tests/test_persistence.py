@@ -21,6 +21,7 @@ def _make_session(
     session_id: str = "s1",
     bound: int | None = 0xFF22,
     client: int | None = 0xCC11,
+    first_seen_at: float = 1.0,
 ) -> Session:
     return Session(
         session_id=session_id,
@@ -32,6 +33,7 @@ def _make_session(
         client_window_id=client,
         last_event="UserPromptSubmit",
         background_active=False,
+        first_seen_at=first_seen_at,
     )
 
 
@@ -79,6 +81,7 @@ def test_load_round_trips_all_fields(tmp_path):
         client_window_id=0x200,
         last_event="PermissionRequest",
         background_active=True,
+        first_seen_at=10.0,
     )
     p.save([original])
     _settle(p)
@@ -96,6 +99,7 @@ def test_load_round_trips_all_fields(tmp_path):
     assert s.client_window_id == 0x200
     assert s.last_event == "PermissionRequest"
     assert s.background_active is True
+    assert s.first_seen_at == 10.0
 
 
 def test_load_missing_file_returns_empty(tmp_path):
@@ -150,6 +154,35 @@ def test_load_skips_individual_bad_entries(tmp_path):
     p = BindingPersister(path)
     loaded = p.load()
     assert [s.session_id for s in loaded] == ["good"]
+
+
+def test_load_missing_first_seen_at_falls_back_to_last_event_at(tmp_path):
+    """Pre-#3 bindings files don't carry first_seen_at. Loading them must
+    not raise — fall back to last_event_at so existing sessions retain a
+    plausible appearance timestamp for the dashboard sort."""
+    path = tmp_path / "sessions.json"
+    path.write_text(json.dumps({
+        "version": SCHEMA_VERSION,
+        "saved_at": 0,
+        "sessions": [
+            {
+                "session_id": "old",
+                "cwd": "/p",
+                "claude_pid": 1,
+                "status": "waiting",
+                "last_event_at": 12.5,
+                "last_event": "Stop",
+                "background_active": False,
+                "bound_window_id": 0xFF,
+                "client_window_id": 0xFF,
+                # NOTE: no first_seen_at
+            },
+        ],
+    }))
+    p = BindingPersister(path)
+    loaded = p.load()
+    assert len(loaded) == 1
+    assert loaded[0].first_seen_at == 12.5
 
 
 def test_save_writes_file_with_0600_permissions(tmp_path):

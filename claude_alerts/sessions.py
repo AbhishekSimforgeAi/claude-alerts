@@ -62,6 +62,10 @@ class Session:
     client_window_id: Optional[int] = None
     last_event: str = ""
     background_active: bool = False
+    # Wall-clock timestamp of the first event we observed for this session.
+    # Stable for the life of the session and used as the dashboard sort key
+    # so a row's position doesn't jump when status flips.
+    first_seen_at: float = 0.0
 
 
 class SessionStore:
@@ -122,6 +126,7 @@ class SessionStore:
                 status=new_status,
                 last_event_at=evt.timestamp,
                 last_event=evt.event,
+                first_seen_at=evt.timestamp,
             )
             self._sessions[evt.session_id] = session
             changed = True
