@@ -78,6 +78,51 @@ if [ -n "${SESSION_ID:-}" ] && [ -n "${CONTEXT_WINDOW:-}" ] \
     mv "$TMP" "$OUT"
 fi
 
+# Set the terminal-window title via OSC 2 on every prompt update so the user
+# can see context-window usage at a glance in alt-tab strips, taskbars, and
+# tmux/screen panes — without reading the visible status-line text.
+#
+# Title format with context data: "<basename>: N% (used/total)" where the
+# percent and k/M abbreviation match the dashboard's _short_tokens semantics.
+# Sub-1% non-zero usage renders as "<1%" instead of "0%" so the user knows
+# tokens are accumulating before the percentage rounds up. When context data
+# is missing or the session hasn't made an API call yet, the title falls
+# back to just "<basename>" (no colon, no percent, no parentheses).
+#
+# Bytes go to /dev/tty (the controlling terminal pty) — never to stdout,
+# which Claude Code reads as the visible status-line text. Tests override
+# the destination via CLAUDE_ALERTS_TTY.
+BASENAME="${CWD##*/}"
+TITLE_SUFFIX=""
+if [ -n "${CONTEXT_WINDOW:-}" ] && [ "$CONTEXT_WINDOW" != "null" ] \
+        && printf '%s' "$CONTEXT_WINDOW" | jq -e . >/dev/null 2>&1; then
+    CTX_FIELDS="$(printf '%s' "$CONTEXT_WINDOW" | jq -r '
+        if (.context_window_size != null) and (.used_percentage != null) and (.current_usage != null) then
+            ((.current_usage.input_tokens // 0) + (.current_usage.cache_creation_input_tokens // 0) + (.current_usage.cache_read_input_tokens // 0)) as $used |
+            "\(.used_percentage) \($used) \(.context_window_size)"
+        else
+            ""
+        end
+    ' 2>/dev/null || true)"
+    if [ -n "$CTX_FIELDS" ]; then
+        TITLE_SUFFIX="$(awk -v fields="$CTX_FIELDS" '
+        function shortn(n) {
+            if (n < 1000) return sprintf("%d", n);
+            if (n < 1000000) return sprintf("%dk", int(n/1000 + 0.5));
+            return sprintf("%.1fM", n/1000000);
+        }
+        BEGIN {
+            split(fields, a, " ");
+            pct = a[1] + 0; used = a[2] + 0; total = a[3] + 0;
+            if (pct > 0 && pct < 1) ps = "<1%";
+            else ps = sprintf("%d%%", int(pct + 0.5));
+            printf ": %s (%s/%s)", ps, shortn(used), shortn(total);
+        }')"
+    fi
+fi
+TTY_TARGET="${CLAUDE_ALERTS_TTY:-/dev/tty}"
+printf '\033]2;%s%s\007' "$BASENAME" "$TITLE_SUFFIX" > "$TTY_TARGET" 2>/dev/null || true
+
 # Optionally chain to an existing statusLine command. The wrapped command must
 # be an absolute path the user trusts; we refuse anything containing whitespace
 # or shell metacharacters to harden against environment-injection attacks
