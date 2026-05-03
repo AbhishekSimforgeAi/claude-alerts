@@ -324,20 +324,22 @@ def test_dashboard_sorts_sessions_by_first_seen_at_ascending(tmp_path):
     first_seen_at. Earlier sessions are higher in the list."""
     store = SessionStore()
     # Insert "late" first, then "early" — order of insertion must not matter.
+    # Distinct cwds so rendered rows can be identified after the SESSION
+    # column was removed (issue #2).
     store.apply_event(ClaudeEvent(
-        event="UserPromptSubmit", session_id="late0001-x", cwd="/work",
+        event="UserPromptSubmit", session_id="late0001-x", cwd="/work/late",
         claude_pid=1, timestamp=200.0,
     ))
     store.apply_event(ClaudeEvent(
-        event="UserPromptSubmit", session_id="early001-x", cwd="/work",
+        event="UserPromptSubmit", session_id="early001-x", cwd="/work/early",
         claude_pid=1, timestamp=100.0,
     ))
     d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
     text = d.render_string()
-    rows = [r for r in text.splitlines() if "/work" in r]
+    rows = [r for r in text.splitlines() if "/work/" in r]
     assert len(rows) == 2
-    assert "early001" in rows[0]
-    assert "late0001" in rows[1]
+    assert "/work/early" in rows[0]
+    assert "/work/late" in rows[1]
 
 
 def test_dashboard_row_position_stable_across_status_flip(tmp_path):
@@ -346,25 +348,25 @@ def test_dashboard_row_position_stable_across_status_flip(tmp_path):
     later session would jump to the top when it became WORKING."""
     store = SessionStore()
     store.apply_event(ClaudeEvent(
-        event="UserPromptSubmit", session_id="early001-x", cwd="/work",
+        event="UserPromptSubmit", session_id="early001-x", cwd="/work/early",
         claude_pid=1, timestamp=100.0,
     ))
     store.apply_event(ClaudeEvent(
-        event="Stop", session_id="late0001-x", cwd="/work",
+        event="Stop", session_id="late0001-x", cwd="/work/late",
         claude_pid=1, timestamp=200.0,
     ))
     d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
-    rows_before = [r for r in d.render_string().splitlines() if "/work" in r]
+    rows_before = [r for r in d.render_string().splitlines() if "/work/" in r]
 
     # late0001 flips WAITING → WORKING. Old sort would move it above early001.
     store.apply_event(ClaudeEvent(
-        event="UserPromptSubmit", session_id="late0001-x", cwd="/work",
+        event="UserPromptSubmit", session_id="late0001-x", cwd="/work/late",
         claude_pid=1, timestamp=300.0,
     ))
-    rows_after = [r for r in d.render_string().splitlines() if "/work" in r]
+    rows_after = [r for r in d.render_string().splitlines() if "/work/" in r]
 
-    assert "early001" in rows_before[0] and "late0001" in rows_before[1]
-    assert "early001" in rows_after[0] and "late0001" in rows_after[1]
+    assert "/work/early" in rows_before[0] and "/work/late" in rows_before[1]
+    assert "/work/early" in rows_after[0] and "/work/late" in rows_after[1]
 
 
 def test_dashboard_session_block_keeps_cwd_aligned(tmp_path):
