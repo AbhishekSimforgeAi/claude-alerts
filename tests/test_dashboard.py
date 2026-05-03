@@ -14,7 +14,6 @@ from claude_alerts.dashboard import (
     _format_ctx,
     _format_resets_in,
     _short_cwd,
-    _short_id,
     _short_tokens,
 )
 from claude_alerts.events import ClaudeEvent
@@ -25,10 +24,6 @@ def _write_sidecar(tmp_path: Path, payload: dict) -> Path:
     p = tmp_path / "rate_limits.json"
     p.write_text(json.dumps(payload))
     return p
-
-
-def test_short_id_takes_uuid_prefix():
-    assert _short_id("5756986d-da80-4494-af8d-35dccc263499") == "5756986d"
 
 
 def test_short_cwd_substitutes_home(monkeypatch, tmp_path):
@@ -115,9 +110,26 @@ def test_dashboard_lists_active_session(tmp_path):
     ))
     d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
     text = d.render_string()
-    assert "abc12345" in text
+    # Session-id hash is no longer rendered in the dashboard (#2).
+    assert "abc12345" not in text
     assert "1 session" in text
     assert "● working" in text
+
+
+def test_dashboard_session_header_omits_session_column(tmp_path):
+    """Header is `STATUS     CTX               CWD` — no SESSION column (#2)."""
+    store = SessionStore()
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="abc12345-x", cwd=str(tmp_path),
+        claude_pid=1, timestamp=1.0,
+    ))
+    d = Dashboard(store, sidecar_path=tmp_path / "absent.json", force_render=True)
+    text = d.render_string()
+    header_lines = [line for line in text.splitlines() if "STATUS" in line and "CTX" in line]
+    assert len(header_lines) == 1
+    header = header_lines[0]
+    assert "SESSION" not in header
+    assert header.lstrip() == "STATUS     CTX               CWD"
 
 
 def test_dashboard_marks_data_stale_when_old(tmp_path):
