@@ -15,9 +15,12 @@ def has_jq():
     return shutil.which("jq") is not None
 
 
-def _run(payload: dict, tmp_path: Path) -> subprocess.CompletedProcess:
+def _run(payload: dict, tmp_path: Path, *, tty_file: Path | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["CLAUDE_ALERTS_STATE_DIR"] = str(tmp_path)
+    # Redirect the OSC title write away from the real /dev/tty so tests
+    # don't change the terminal title of whoever is running pytest.
+    env["CLAUDE_ALERTS_TTY"] = str(tty_file) if tty_file is not None else str(tmp_path / "tty")
     env.pop("CLAUDE_ALERTS_WRAPPED_STATUSLINE", None)
     return subprocess.run(
         ["bash", str(SCRIPT)],
@@ -117,3 +120,62 @@ def test_atomic_write_no_tmp_files_left(tmp_path):
     _run(_full_payload(), tmp_path)
     contexts_dir = tmp_path / "contexts"
     assert list(contexts_dir.glob("*.tmp")) == []
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required")
+def test_writes_osc_title_with_ctx(tmp_path):
+    """OSC 2 sequence written to /dev/tty when context_window is present.
+
+    used = 8000 + 4000 + 2000 = 14000 -> "14k"
+    total = 200000                    -> "200k"
+    pct   = 5.0                       -> "5%"
+    cwd basename = "proj"
+    """
+    tty_file = tmp_path / "tty"
+    _run(_full_payload(), tmp_path, tty_file=tty_file)
+    assert tty_file.read_bytes() == b"\x1b]2;proj: 5% (14k/200k)\x07"
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required")
+def test_writes_osc_title_without_ctx(tmp_path):
+    """Without context_window the title is just the folder basename — no
+    colon, no percent, no parentheses."""
+    payload = _full_payload()
+    del payload["context_window"]
+    tty_file = tmp_path / "tty"
+    _run(payload, tmp_path, tty_file=tty_file)
+    assert tty_file.read_bytes() == b"\x1b]2;proj\x07"
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required")
+def test_writes_osc_title_partial_ctx_falls_back_to_basename(tmp_path):
+    """Brand-new session (context_window present but current_usage null)
+    falls back to just the folder basename."""
+    payload = _full_payload()
+    payload["context_window"] = {"context_window_size": 200000}
+    tty_file = tmp_path / "tty"
+    _run(payload, tmp_path, tty_file=tty_file)
+    assert tty_file.read_bytes() == b"\x1b]2;proj\x07"
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required")
+def test_writes_osc_title_sub_one_percent(tmp_path):
+    """Sub-1% non-zero usage renders as '<1%' rather than '0%'."""
+    payload = _full_payload()
+    payload["context_window"]["used_percentage"] = 0.5
+    tty_file = tmp_path / "tty"
+    _run(payload, tmp_path, tty_file=tty_file)
+    contents = tty_file.read_bytes()
+    assert contents.startswith(b"\x1b]2;proj: <1% (")
+    assert contents.endswith(b")\x07")
+    assert b"0%" not in contents
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required")
+def test_osc_bytes_not_in_stdout(tmp_path):
+    """OSC bytes never appear in stdout (the visible status-line text)."""
+    result = _run(_full_payload(), tmp_path)
+    assert "\x1b" not in result.stdout
+    assert "\x07" not in result.stdout
+    # Sanity: the existing visible status line is still emitted on stdout.
+    assert "Sonnet" in result.stdout

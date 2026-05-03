@@ -61,10 +61,6 @@ def _strip_control(s: str) -> str:
     return _CONTROL_CHARS.sub("?", s)
 
 
-def _short_id(session_id: str) -> str:
-    return _strip_control(session_id.split("-", 1)[0])
-
-
 def _short_cwd(cwd: str, max_chars: int = 50) -> str:
     cwd = _strip_control(cwd)
     home = str(Path.home())
@@ -290,11 +286,10 @@ class Dashboard:
         if not sessions:
             return ["  no active sessions."]
         # CTX column is fixed-width 16 (see _format_ctx).
-        rows = [f"  SESSION   STATUS     {'CTX':<16}  CWD"]
+        rows = [f"  STATUS     {'CTX':<16}  CWD"]
         for s in sessions:
-            sid = _short_id(s.session_id)
             cwd = _short_cwd(s.cwd)
             cu = contexts.load(s.session_id, self.contexts_dir)
             ctx = _format_ctx(cu)
-            rows.append(f"  {sid:<8}  {_status_marker(s.status):<9}  {ctx}  {cwd}")
+            rows.append(f"  {_status_marker(s.status):<9}  {ctx}  {cwd}")
         return rows

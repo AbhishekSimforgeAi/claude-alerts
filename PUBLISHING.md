@@ -66,8 +66,8 @@ get forgotten.
   `IDLE_SWEEP_INTERVAL_S` / `IDLE_MAX_AGE_S` in `daemon.py:26-27`,
   `SIDECAR_STALE_AFTER_S` in `dashboard.py`, `BACKGROUND_TASK_TOOLS` and
   `TERMINAL_WM_CLASSES` lists.
-- `_short_cwd` and `_short_id` use byte-length, not visible width.
-  Multibyte / wide CJK / emoji paths render ragged but don't crash.
+- `_short_cwd` uses byte-length, not visible width. Multibyte / wide
+  CJK / emoji paths render ragged but don't crash.
 - `evict_idle` mixes `time.time()` (wall-clock) and `time.monotonic()`.
   Wall-clock leaps survive but could surprise.
 - `--verbose` / `-v` CLI flag for stderr logging (currently only
