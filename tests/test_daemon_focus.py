@@ -168,3 +168,37 @@ def test_run_subscribes_to_property_changes_and_seeds_initial_focus(monkeypatch,
     assert fake.subscribe_property_called, "daemon must subscribe to root property changes"
     assert fake.active_window_queries >= 1, "daemon must query active window at startup"
     assert received == [0xBEEF]
+
+
+def test_initial_focus_query_failure_does_not_abort_startup(monkeypatch, tmp_path):
+    """If the X server returns a malformed/absent _NET_ACTIVE_WINDOW or otherwise
+    raises during the startup query, the daemon must keep starting — the next
+    PropertyNotify will populate focus shortly after, and aborting startup over
+    a single missed property would be a hard regression on every Claude session."""
+    from claude_alerts import daemon as daemon_mod
+
+    fake = _FocusFakeX11()
+
+    def _boom():
+        fake.active_window_queries += 1
+        raise RuntimeError("simulated X11 failure on initial property read")
+
+    fake.get_active_window_id = _boom
+    monkeypatch.setattr(daemon_mod, "X11Client", lambda: fake)
+    d = daemon_mod.Daemon(events_dir=tmp_path / "events", config=Config())
+
+    received = []
+    real = d.overlay.set_focused_window
+
+    def _spy(wid):
+        received.append(wid)
+        return real(wid)
+    d.overlay.set_focused_window = _spy
+
+    d._stop.set()
+    # No exception: run() must swallow the initial focus failure and proceed.
+    d.run()
+
+    assert fake.active_window_queries == 1, "daemon must still attempt the initial query"
+    assert received == [], "set_focused_window must NOT be called when the query raises"
+    assert fake.subscribe_property_called, "subscribe must still happen after a failed query"
