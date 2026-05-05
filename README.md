@@ -132,6 +132,12 @@ Optional — defaults are baked in. Override at
 [colors]
 working = "#22c55e"
 waiting = "#ef4444"
+# Optional. When omitted, the unfocused (dim) variants are derived from the
+# focused colours by multiplying each RGB channel by 0.25. Set them
+# explicitly if the derived dim is too aggressive (or not aggressive enough)
+# for your terminal background.
+# working_unfocused = "#083117"
+# waiting_unfocused = "#3b1111"
 
 [border]
 thickness_px = 4

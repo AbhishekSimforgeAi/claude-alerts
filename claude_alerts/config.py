@@ -20,6 +20,10 @@ class ConfigError(ValueError):
 class Config:
     color_working: str = "#22c55e"
     color_waiting: str = "#ef4444"
+    # When None, the daemon derives the dim variant from the focused colour
+    # via dim_hex(..., 0.25). When set, the configured value is used verbatim.
+    color_working_unfocused: str | None = None
+    color_waiting_unfocused: str | None = None
     border_thickness_px: int = 4
     log_level: str = "INFO"
 
@@ -38,6 +42,22 @@ def _require_int(value, field: str) -> int:
             f"{field} must be an integer, got {type(value).__name__}"
         )
     return value
+
+
+def _require_hex_color(value, field: str) -> str:
+    s = _require_str(value, field)
+    candidate = s.lstrip("#")
+    if len(candidate) != 6:
+        raise ConfigError(
+            f"{field} must be a 6-digit hex color like '#22c55e', got {s!r}"
+        )
+    try:
+        int(candidate, 16)
+    except ValueError as e:
+        raise ConfigError(
+            f"{field} must be a 6-digit hex color like '#22c55e', got {s!r}"
+        ) from e
+    return s
 
 
 def load_config(path: Path) -> Config:
@@ -66,6 +86,14 @@ def load_config(path: Path) -> Config:
         overrides["color_working"] = _require_str(colors["working"], "colors.working")
     if "waiting" in colors:
         overrides["color_waiting"] = _require_str(colors["waiting"], "colors.waiting")
+    if "working_unfocused" in colors:
+        overrides["color_working_unfocused"] = _require_hex_color(
+            colors["working_unfocused"], "colors.working_unfocused"
+        )
+    if "waiting_unfocused" in colors:
+        overrides["color_waiting_unfocused"] = _require_hex_color(
+            colors["waiting_unfocused"], "colors.waiting_unfocused"
+        )
 
     border = data.get("border", {})
     if not isinstance(border, dict):

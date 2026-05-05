@@ -109,3 +109,73 @@ def test_wrong_type_debug_section_raises(tmp_path):
     p.write_text('debug = "not a table"\n')
     with pytest.raises(ConfigError, match="debug must be a TOML table"):
         load_config(p)
+
+
+# ---------- unfocused border colour overrides (#12) ----------
+#
+# Four matrix cells: both keys present, only working_unfocused, only
+# waiting_unfocused, neither. Plus malformed-value cases.
+
+
+def test_unfocused_neither_present_defaults_to_none(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[colors]\nworking = "#22c55e"\nwaiting = "#ef4444"\n')
+    cfg = load_config(p)
+    assert cfg.color_working_unfocused is None
+    assert cfg.color_waiting_unfocused is None
+
+
+def test_unfocused_only_working_present(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[colors]\nworking_unfocused = "#0a0a0a"\n')
+    cfg = load_config(p)
+    assert cfg.color_working_unfocused == "#0a0a0a"
+    assert cfg.color_waiting_unfocused is None
+
+
+def test_unfocused_only_waiting_present(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[colors]\nwaiting_unfocused = "#1b0000"\n')
+    cfg = load_config(p)
+    assert cfg.color_working_unfocused is None
+    assert cfg.color_waiting_unfocused == "#1b0000"
+
+
+def test_unfocused_both_present(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(
+        '[colors]\n'
+        'working_unfocused = "#0a0a0a"\n'
+        'waiting_unfocused = "#1b0000"\n'
+    )
+    cfg = load_config(p)
+    assert cfg.color_working_unfocused == "#0a0a0a"
+    assert cfg.color_waiting_unfocused == "#1b0000"
+
+
+def test_unfocused_working_non_string_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[colors]\nworking_unfocused = 42\n')
+    with pytest.raises(ConfigError, match="colors.working_unfocused"):
+        load_config(p)
+
+
+def test_unfocused_waiting_non_string_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[colors]\nwaiting_unfocused = true\n')
+    with pytest.raises(ConfigError, match="colors.waiting_unfocused"):
+        load_config(p)
+
+
+def test_unfocused_working_bad_hex_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[colors]\nworking_unfocused = "#zz0000"\n')
+    with pytest.raises(ConfigError, match="colors.working_unfocused"):
+        load_config(p)
+
+
+def test_unfocused_waiting_wrong_length_raises(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[colors]\nwaiting_unfocused = "#abcde"\n')
+    with pytest.raises(ConfigError, match="colors.waiting_unfocused"):
+        load_config(p)
