@@ -55,6 +55,8 @@ def tracking_daemon(monkeypatch, tmp_path):
             return []
         def subscribe_root_substructure(self):
             call_threads.append(("subscribe_root_substructure", threading.current_thread().name))
+        def subscribe_root_property_changes(self):
+            call_threads.append(("subscribe_root_property_changes", threading.current_thread().name))
         def pending_events(self):
             return 0
         def next_event(self):

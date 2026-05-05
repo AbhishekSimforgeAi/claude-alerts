@@ -47,6 +47,8 @@ class _NoopX11:
         pass
     def subscribe_root_substructure(self):
         pass
+    def subscribe_root_property_changes(self):
+        pass
     def get_active_window_id(self):
         return None
     def get_wm_class(self, wid):

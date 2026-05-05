@@ -140,7 +140,22 @@ class X11Client:
 
     def subscribe_root_substructure(self) -> None:
         """Receive ConfigureNotify and DestroyNotify for all top-level windows."""
-        self.root.change_attributes(event_mask=X.SubstructureNotifyMask)
+        self.root.change_attributes(
+            event_mask=X.SubstructureNotifyMask | X.PropertyChangeMask
+        )
+        self.display.flush()
+
+    def subscribe_root_property_changes(self) -> None:
+        """Receive PropertyNotify on the root window — used to track
+        ``_NET_ACTIVE_WINDOW`` changes for focus modulation.
+
+        Calling this after :meth:`subscribe_root_substructure` is harmless;
+        change_attributes replaces the mask, so this method ORs the
+        substructure mask back in so neither subscription cancels the other.
+        """
+        self.root.change_attributes(
+            event_mask=X.SubstructureNotifyMask | X.PropertyChangeMask
+        )
         self.display.flush()
 
     def get_frame_window_id(self, client_window_id: int) -> Optional[int]:

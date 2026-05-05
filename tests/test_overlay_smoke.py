@@ -68,6 +68,7 @@ class _RecordingX11:
 class _FakeOverlayWindow:
     """Stand-in for the real X11-touching _OverlayWindow."""
     instances: list["_FakeOverlayWindow"] = []
+    _next_id = 0xFA00  # auto-increment window_id so the manager's self-filter has something to match
 
     def __init__(self, x11, geo, color_pixel, thickness, transient_for_window_id=None):
         self.geo = geo
@@ -76,6 +77,8 @@ class _FakeOverlayWindow:
         self.transient_for_window_id = transient_for_window_id
         self.update_calls: list[Geometry] = []
         self.destroyed = False
+        self.window_id = _FakeOverlayWindow._next_id
+        _FakeOverlayWindow._next_id += 1
         _FakeOverlayWindow.instances.append(self)
 
     def update_geometry(self, geo):
@@ -442,3 +445,216 @@ def test_color_for_elicitation_with_background_active_is_red(monkeypatch):
     assert s.background_active is True
     assert s.last_event == "Elicitation"
     assert mgr.color_for(s) == _red_pixel()
+
+
+# --- focus modulation tests --------------------------------------------------
+
+
+def _green_dim_pixel():
+    from claude_alerts.colors import dim_hex
+    from claude_alerts.overlay import _rgb_to_pixel, hex_to_rgb
+    return _rgb_to_pixel(hex_to_rgb(dim_hex(Config().color_working, 0.25)))
+
+
+def _red_dim_pixel():
+    from claude_alerts.colors import dim_hex
+    from claude_alerts.overlay import _rgb_to_pixel, hex_to_rgb
+    return _rgb_to_pixel(hex_to_rgb(dim_hex(Config().color_waiting, 0.25)))
+
+
+def _bind_session(store, sid, frame_wid, client_wid):
+    store.set_bound_window(sid, frame_wid, client_window_id=client_wid)
+
+
+def test_unfocused_bound_session_paints_dim_green_when_working(monkeypatch):
+    """A WORKING session whose client window is not the active window paints
+    the derived 0.25-ratio dim of the working colour."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    # Focus is on something else — the dashboard window, say.
+    mgr.set_focused_window(0xDDDD)
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _green_dim_pixel()
+
+
+def test_unfocused_bound_session_paints_dim_red_when_waiting(monkeypatch):
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="Stop", session_id="s1", cwd="/p", claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(0xDDDD)
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _red_dim_pixel()
+
+
+def test_focused_bound_session_paints_full_brightness(monkeypatch):
+    """When focus moves to the bound session's client window, its overlay
+    paints the emissive colour."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(CLIENT_WID)
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _green_pixel()
+
+
+def test_focus_change_between_two_sessions_dims_previous_lights_new(monkeypatch):
+    """Focus moving from session A's window to session B's window should
+    dim A and light B in a single update."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    # Session A
+    store.apply_event(ClaudeEvent(
+        event="SessionStart", session_id="sA", cwd="/p", claude_pid=1, timestamp=1.0,
+    ))
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="sA", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "sA", 0xAA00, 0xAA01)
+    # Session B
+    store.apply_event(ClaudeEvent(
+        event="SessionStart", session_id="sB", cwd="/p", claude_pid=2, timestamp=3.0,
+    ))
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="sB", cwd="/p",
+        claude_pid=2, timestamp=4.0,
+    ))
+    _bind_session(store, "sB", 0xBB00, 0xBB01)
+
+    # Visible geometry resolves only for FRAME_WID/CLIENT_WID in _RecordingX11;
+    # patch the recording fake to also resolve our test ids.
+    # Our _RecordingX11 returns None for unknown wids — let's monkeypatch.
+    # Easier: extend the fake on the fly.
+    from claude_alerts.x11 import Geometry as _Geo
+    mgr.x11.get_visible_geometry = lambda wid: _Geo(0, 0, 100, 100) if wid in (0xAA01, 0xBB01) else None
+    # Force a re-sync now that geometry resolves.
+    mgr.refresh_all_geometry()
+    mgr._sync_one(store.get("sA"))
+    mgr._sync_one(store.get("sB"))
+
+    # Focus on A.
+    mgr.set_focused_window(0xAA01)
+    overlays_by_sid = {s.session_id: ov for s, ov in zip(store.all(), _FakeOverlayWindow.instances) if False}  # noqa: unused
+
+    # Manually map by inspecting overlays via their position in instances:
+    # Sessions get their _FakeOverlayWindow on first _sync_one. The instance
+    # list ordering depends on insertion; pull them from the manager directly.
+    ov_a = mgr._overlays["sA"]
+    ov_b = mgr._overlays["sB"]
+    assert ov_a.color_pixel == _green_pixel()
+    assert ov_b.color_pixel == _green_dim_pixel()
+
+    # Focus moves to B.
+    mgr.set_focused_window(0xBB01)
+    assert ov_a.color_pixel == _green_dim_pixel()
+    assert ov_b.color_pixel == _green_pixel()
+
+
+def test_focus_on_non_claude_window_dims_all(monkeypatch):
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(CLIENT_WID)
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _green_pixel()
+    # Focus moves to a totally unrelated window.
+    mgr.set_focused_window(0xDDDD)
+    assert overlay.color_pixel == _green_dim_pixel()
+
+
+def test_focus_none_dims_all(monkeypatch):
+    """No active window at all (rare, but possible)."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(CLIENT_WID)
+    overlay = _FakeOverlayWindow.instances[0]
+    mgr.set_focused_window(None)
+    assert overlay.color_pixel == _green_dim_pixel()
+
+
+def test_set_focused_window_ignores_our_own_overlay_windows(monkeypatch):
+    """Defensive filter: a focus event whose target is one of our overlay
+    windows must not displace the real focus state."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(CLIENT_WID)
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _green_pixel()
+
+    # Now an event arrives saying our own overlay is the active window.
+    mgr.set_focused_window(overlay.window_id)
+    # Focus must NOT change — the bound session is still focused.
+    assert overlay.color_pixel == _green_pixel()
+
+
+def test_duplicate_focus_events_are_idempotent(monkeypatch):
+    """Two PropertyNotify events for the same active window should not
+    cause two repaints (coalescing)."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(CLIENT_WID)
+    overlay = _FakeOverlayWindow.instances[0]
+    # Track set_color calls.
+    initial_color = overlay.color_pixel
+    paint_count = [0]
+    real_set_color = overlay.set_color
+
+    def _counting(pixel):
+        paint_count[0] += 1
+        real_set_color(pixel)
+    overlay.set_color = _counting
+
+    mgr.set_focused_window(CLIENT_WID)
+    mgr.set_focused_window(CLIENT_WID)
+    assert paint_count[0] == 0
+    assert overlay.color_pixel == initial_color
+
+
+def test_overlay_destroyed_removes_from_self_filter(monkeypatch):
+    """When a session unbinds, its overlay window id leaves the self-filter
+    set so that wid is freed up for legitimate focus tracking later."""
+    mgr, store, _ = _make_manager(monkeypatch)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    overlay = _FakeOverlayWindow.instances[0]
+    overlay_wid = overlay.window_id
+    store.set_bound_window("s1", None)
+    assert overlay.destroyed
+    # Now a focus event for that ex-overlay-id should pass through (not
+    # silently swallowed) — though there's nothing bound to repaint, the
+    # internal state should update.
+    assert overlay_wid not in mgr._overlay_window_ids

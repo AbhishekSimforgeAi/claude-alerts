@@ -100,6 +100,13 @@ sitting idle at `Stop`. Stays green during autonomous wake-ups (`Monitor`,
 `CronCreate`, `RemoteTrigger`, `ScheduleWakeup`) so you don't get a false
 "needs me" signal while a background task is alive.
 
+The border is also **modulated by focus**: only the currently-focused
+Claude terminal paints at full brightness — every other bound terminal
+dims its border to ¼ intensity. When focus moves to a non-Claude window
+(another app, the dashboard) all Claude borders go dim. This makes a
+single needs-me terminal jump out across a screen full of Claude sessions
+without any of them being individually loud.
+
 In the daemon's own terminal:
 
 ```
