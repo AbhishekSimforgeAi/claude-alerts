@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from Xlib import X, Xatom
 from Xlib.ext import shape
 
+from claude_alerts.colors import dim_hex, pick_color_pixel
 from claude_alerts.config import Config
 from claude_alerts.sessions import (
     Session,
@@ -14,6 +16,10 @@ from claude_alerts.sessions import (
     USER_ACTION_EVENTS,
 )
 from claude_alerts.x11 import Geometry, X11Client
+
+# Ratio applied to focused colours to derive the unfocused/dim variant. #11
+# hard-codes 0.25; #12 will let users override per-state via config.toml.
+DIM_RATIO = 0.25
 
 log = logging.getLogger(__name__)
 
@@ -44,12 +50,19 @@ class _OverlayWindow:
         self.x11 = x11
         self.thickness = thickness
         self.color_pixel = color_pixel
+        self.window_id: Optional[int] = None
         self.win = x11.screen.root.create_window(
             target_geo.x, target_geo.y, target_geo.width, target_geo.height, 0,
             X.CopyFromParent, X.InputOutput, X.CopyFromParent,
             background_pixel=color_pixel,
             event_mask=X.ExposureMask,
         )
+        # Cache the X server's id so the manager can filter focus events
+        # whose target is one of our own overlay windows.
+        try:
+            self.window_id = int(self.win.id)
+        except Exception:
+            self.window_id = None
         self._apply_shape(target_geo)
         # Set WM hints so the overlay stacks with its terminal, has no
         # decorations, and stays out of taskbar / alt-tab.
@@ -127,23 +140,64 @@ class OverlayManager:
         self._overlays: dict[str, _OverlayWindow] = {}
         self._working_pixel = _rgb_to_pixel(hex_to_rgb(config.color_working))
         self._waiting_pixel = _rgb_to_pixel(hex_to_rgb(config.color_waiting))
+        self._working_dim_pixel = _rgb_to_pixel(
+            hex_to_rgb(dim_hex(config.color_working, DIM_RATIO))
+        )
+        self._waiting_dim_pixel = _rgb_to_pixel(
+            hex_to_rgb(dim_hex(config.color_waiting, DIM_RATIO))
+        )
+        # Currently-focused client window id (per _NET_ACTIVE_WINDOW). None
+        # when no Claude or other window is focused; daemon queries the
+        # X server at startup so this reflects reality before the first paint.
+        self._focused_client_id: Optional[int] = None
+        # X11 ids of overlay windows we have created. Used to filter
+        # _NET_ACTIVE_WINDOW updates that target our own overlays — those
+        # would otherwise dim every Claude border whenever a new overlay maps.
+        self._overlay_window_ids: set[int] = set()
         store.on_change(self.on_session_changed)
 
-    def color_for(self, session: Session) -> int:
+    def color_for(self, session: Session, *, is_focused: bool = True) -> int:
         """Pick the overlay color for a session.
 
-        Green when Claude is actively WORKING, or when the session has an
-        autonomous wake-up alive (background_active) and the most recent
-        event was not a user-action event. User-action events (Notification,
-        PermissionRequest) always paint red, because they mean the user
-        must act, even if a background task is also alive.
+        ``is_focused`` defaults to True so callers that don't track focus
+        (older tests, third-party code) keep the pre-#11 emissive behaviour.
         """
-        if session.status == Status.WORKING:
-            return self._working_pixel
-        # status == WAITING from here.
-        if session.background_active and session.last_event not in USER_ACTION_EVENTS:
-            return self._working_pixel
-        return self._waiting_pixel
+        return pick_color_pixel(
+            status=session.status,
+            last_event=session.last_event,
+            background_active=session.background_active,
+            is_focused=is_focused,
+            working_pixel=self._working_pixel,
+            waiting_pixel=self._waiting_pixel,
+            working_dim_pixel=self._working_dim_pixel,
+            waiting_dim_pixel=self._waiting_dim_pixel,
+        )
+
+    def _is_focused(self, session: Session) -> bool:
+        cid = session.client_window_id
+        if cid is None:
+            return False
+        return self._focused_client_id == cid
+
+    def set_focused_window(self, window_id: Optional[int]) -> None:
+        """Update the currently-focused client window.
+
+        Called by the daemon mainloop on _NET_ACTIVE_WINDOW PropertyNotify
+        and once at startup. Repaints every bound overlay through the pure
+        colour-policy function. Filters out focus events targeting one of
+        our own overlay windows (which can fire briefly when a new overlay
+        maps) and coalesces no-op updates.
+        """
+        if window_id is not None and window_id in self._overlay_window_ids:
+            return
+        if self._focused_client_id == window_id:
+            return
+        self._focused_client_id = window_id
+        for session in self.store.all():
+            ov = self._overlays.get(session.session_id)
+            if ov is None:
+                continue
+            ov.set_color(self.color_for(session, is_focused=self._is_focused(session)))
 
     def on_session_changed(self, session_id: str) -> None:
         session = self.store.get(session_id)
@@ -206,12 +260,16 @@ class OverlayManager:
             self._destroy(session.session_id)
             return
         existing = self._overlays.get(session.session_id)
-        color_pixel = self.color_for(session)
+        color_pixel = self.color_for(session, is_focused=self._is_focused(session))
         if existing is None:
-            self._overlays[session.session_id] = _OverlayWindow(
+            new_ov = _OverlayWindow(
                 self.x11, geo, color_pixel, self.config.border_thickness_px,
                 transient_for_window_id=session.bound_window_id,
             )
+            self._overlays[session.session_id] = new_ov
+            wid = getattr(new_ov, "window_id", None)
+            if wid is not None:
+                self._overlay_window_ids.add(wid)
         else:
             existing.update_geometry(geo)
             existing.set_color(color_pixel)
@@ -219,4 +277,7 @@ class OverlayManager:
     def _destroy(self, session_id: str) -> None:
         ov = self._overlays.pop(session_id, None)
         if ov is not None:
+            wid = getattr(ov, "window_id", None)
+            if wid is not None:
+                self._overlay_window_ids.discard(wid)
             ov.destroy()

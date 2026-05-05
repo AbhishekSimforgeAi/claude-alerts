@@ -94,6 +94,13 @@ class Daemon:
 
     def run(self) -> None:
         self.x11.subscribe_root_substructure()
+        self.x11.subscribe_root_property_changes()
+        # Seed initial focus so the first paint after a restart reflects the
+        # current _NET_ACTIVE_WINDOW without waiting for the user to alt-tab.
+        try:
+            self.overlay.set_focused_window(self.x11.get_active_window_id())
+        except Exception:
+            log.exception("initial focus query failed")
 
         # Restore persisted bindings before subscribing to events, so the
         # first ingester event sees a fully reconstructed store. Drop entries
@@ -190,6 +197,17 @@ class Daemon:
             # binder.unbind_window calls store.set_bound_window(None) which fires
             # on_change which the overlay handles via _sync_one -> _destroy.
             self.binder.unbind_window(wid)
+        elif et == X.PropertyNotify:
+            # Only the _NET_ACTIVE_WINDOW property on root drives focus
+            # modulation. Anything else (window-name updates, GTK frame
+            # extents on other windows, etc.) we deliberately ignore so the
+            # overlay manager isn't woken on every keystroke.
+            if (
+                getattr(event, "atom", None) == self.x11._NET_ACTIVE_WINDOW
+                and getattr(event, "window", None) is not None
+                and event.window.id == self.x11.root.id
+            ):
+                self.overlay.set_focused_window(self.x11.get_active_window_id())
 
 
 def default_events_dir() -> Path:
