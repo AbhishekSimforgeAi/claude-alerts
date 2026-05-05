@@ -658,3 +658,80 @@ def test_overlay_destroyed_removes_from_self_filter(monkeypatch):
     # silently swallowed) — though there's nothing bound to repaint, the
     # internal state should update.
     assert overlay_wid not in mgr._overlay_window_ids
+
+
+# --- #12: configured unfocused colour overrides ----------------------------
+
+
+def _make_manager_with_config(monkeypatch, cfg):
+    from claude_alerts import overlay as overlay_mod
+    _FakeOverlayWindow.instances = []
+    monkeypatch.setattr(overlay_mod, "_OverlayWindow", _FakeOverlayWindow)
+    store = SessionStore()
+    x11 = _RecordingX11()
+    mgr = overlay_mod.OverlayManager(x11, store, cfg)
+    return mgr, store, x11
+
+
+def test_working_unfocused_override_replaces_derived_dim(monkeypatch):
+    """When color_working_unfocused is set, the dim pixel is the configured
+    value verbatim, not dim_hex(color_working, 0.25)."""
+    from claude_alerts.overlay import _rgb_to_pixel, hex_to_rgb
+    cfg = Config(color_working_unfocused="#0a0a0a")
+    mgr, store, _ = _make_manager_with_config(monkeypatch, cfg)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(0xDDDD)  # unfocused
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _rgb_to_pixel(hex_to_rgb("#0a0a0a"))
+
+
+def test_waiting_unfocused_override_replaces_derived_dim(monkeypatch):
+    from claude_alerts.overlay import _rgb_to_pixel, hex_to_rgb
+    cfg = Config(color_waiting_unfocused="#1b0000")
+    mgr, store, _ = _make_manager_with_config(monkeypatch, cfg)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="Stop", session_id="s1", cwd="/p", claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(0xDDDD)  # unfocused
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _rgb_to_pixel(hex_to_rgb("#1b0000"))
+
+
+def test_overrides_do_not_affect_focused_emissive_paint(monkeypatch):
+    """Override only touches the dim path; focused windows still paint the
+    configured (or default) emissive colour."""
+    cfg = Config(
+        color_working_unfocused="#0a0a0a",
+        color_waiting_unfocused="#1b0000",
+    )
+    mgr, store, _ = _make_manager_with_config(monkeypatch, cfg)
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(CLIENT_WID)
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _green_pixel()
+
+
+def test_unfocused_defaults_to_derived_when_overrides_absent(monkeypatch):
+    """No override config => exact same derived dim pixels as before #12."""
+    mgr, store, _ = _make_manager_with_config(monkeypatch, Config())
+    _start_session(store)
+    store.apply_event(ClaudeEvent(
+        event="UserPromptSubmit", session_id="s1", cwd="/p",
+        claude_pid=1, timestamp=2.0,
+    ))
+    _bind_session(store, "s1", FRAME_WID, CLIENT_WID)
+    mgr.set_focused_window(0xDDDD)
+    overlay = _FakeOverlayWindow.instances[0]
+    assert overlay.color_pixel == _green_dim_pixel()

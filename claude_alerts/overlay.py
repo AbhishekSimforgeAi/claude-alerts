@@ -140,12 +140,18 @@ class OverlayManager:
         self._overlays: dict[str, _OverlayWindow] = {}
         self._working_pixel = _rgb_to_pixel(hex_to_rgb(config.color_working))
         self._waiting_pixel = _rgb_to_pixel(hex_to_rgb(config.color_waiting))
-        self._working_dim_pixel = _rgb_to_pixel(
-            hex_to_rgb(dim_hex(config.color_working, DIM_RATIO))
+        working_dim_hex = (
+            config.color_working_unfocused
+            if config.color_working_unfocused is not None
+            else dim_hex(config.color_working, DIM_RATIO)
         )
-        self._waiting_dim_pixel = _rgb_to_pixel(
-            hex_to_rgb(dim_hex(config.color_waiting, DIM_RATIO))
+        waiting_dim_hex = (
+            config.color_waiting_unfocused
+            if config.color_waiting_unfocused is not None
+            else dim_hex(config.color_waiting, DIM_RATIO)
         )
+        self._working_dim_pixel = _rgb_to_pixel(hex_to_rgb(working_dim_hex))
+        self._waiting_dim_pixel = _rgb_to_pixel(hex_to_rgb(waiting_dim_hex))
         # Currently-focused client window id (per _NET_ACTIVE_WINDOW). None
         # when no Claude or other window is focused; daemon queries the
         # X server at startup so this reflects reality before the first paint.
