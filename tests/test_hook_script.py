@@ -76,6 +76,69 @@ def test_hook_script_omits_tool_name_when_absent(tmp_path):
     assert "tool_name" not in data
 
 
+def _env_without_openclaw(tmp_path):
+    """Build a clean env that scrubs any inherited OPENCLAW_* vars from the
+    developer's shell, so tests don't accidentally trigger the OpenClaw filter."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OPENCLAW_")}
+    env["CLAUDE_ALERTS_EVENTS_DIR"] = str(tmp_path)
+    return env
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required by the hook script")
+def test_hook_script_skips_when_openclaw_env_set(tmp_path):
+    """An OPENCLAW_* env var marks the session as OpenClaw-driven; the hook
+    must exit 0 silently and write nothing to the events dir."""
+    env = _env_without_openclaw(tmp_path)
+    env["OPENCLAW_AGENT_RUNTIME"] = "1"
+    payload = json.dumps({"session_id": "abc", "cwd": "/p"})
+    result = subprocess.run(
+        ["bash", str(HOOK_SCRIPT), "PreToolUse"],
+        input=payload, text=True, env=env,
+        capture_output=True,
+    )
+    assert result.returncode == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required by the hook script")
+def test_hook_script_skips_for_any_openclaw_suffix(tmp_path):
+    """The filter triggers on the OPENCLAW_ prefix regardless of suffix."""
+    env = _env_without_openclaw(tmp_path)
+    env["OPENCLAW_MCP_TOKEN"] = "secret"
+    subprocess.run(
+        ["bash", str(HOOK_SCRIPT), "Stop"],
+        input='{"session_id":"x","cwd":"/y"}', text=True, env=env, check=True,
+    )
+    assert list(tmp_path.glob("*.json")) == []
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required by the hook script")
+def test_hook_script_writes_event_when_no_openclaw_var(tmp_path):
+    """Negative path: with no OPENCLAW_* present, behavior is unchanged."""
+    env = _env_without_openclaw(tmp_path)
+    payload = json.dumps({"session_id": "abc", "cwd": "/p"})
+    subprocess.run(
+        ["bash", str(HOOK_SCRIPT), "PreToolUse"],
+        input=payload, text=True, env=env, check=True,
+    )
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+
+
+@pytest.mark.skipif(not has_jq(), reason="jq is required by the hook script")
+def test_hook_script_filter_does_not_match_lookalike_prefix(tmp_path):
+    """A var named OPENCLAWX (no underscore) must NOT trigger the filter —
+    we match the OPENCLAW_ prefix specifically, not a substring."""
+    env = _env_without_openclaw(tmp_path)
+    env["OPENCLAWX_THING"] = "1"
+    env["NOT_OPENCLAW_FOO"] = "1"
+    subprocess.run(
+        ["bash", str(HOOK_SCRIPT), "Stop"],
+        input='{"session_id":"x","cwd":"/y"}', text=True, env=env, check=True,
+    )
+    assert len(list(tmp_path.glob("*.json"))) == 1
+
+
 @pytest.mark.skipif(not has_jq(), reason="jq is required by the hook script")
 def test_hook_script_sanitizes_session_id_in_filename(tmp_path):
     """A hostile session_id with path-traversal characters must NOT escape

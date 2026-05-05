@@ -5,6 +5,14 @@
 
 set -euo pipefail
 
+# OpenClaw filter: any OPENCLAW_* env var marks the Claude session as
+# agent-runtime-managed, so the daemon should never see its events (no
+# overlay, no dashboard row). Exit 0 silently — OpenClaw's spawn pipeline
+# expects success — and write nothing to the events directory.
+if [ -n "${!OPENCLAW_*}" ]; then
+    exit 0
+fi
+
 EVENT="${1:?event name required}"
 EVENTS_DIR="${CLAUDE_ALERTS_EVENTS_DIR:-$HOME/.local/state/claude-alerts/events}"
 mkdir -p -m 700 "$EVENTS_DIR"
